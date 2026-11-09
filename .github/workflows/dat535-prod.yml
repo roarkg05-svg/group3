@@ -4,13 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      lab:
-        description: Lab to run
-        required: true
-        default: all
-        type: choice
-        options: [all, lab2, lab3]
 
 jobs:
   deploy-prod:
@@ -19,21 +12,26 @@ jobs:
     environment: main
     env:
       DAT535_ENV: prod
-      DAT535_OUTPUT_DIR: /tmp/spark-lab-data/prod
-      SPARK_HOME: /opt/spark
-      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+      DAT535_DATA_DIR: /tmp/spark-lab-data
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      PYTHONPATH: ${{ github.workspace }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Run test suite
+        run: |
+          unset SPARK_HOME
+          export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
+          python -m pytest tests/ -v
+
       - name: Run Production Pipeline
         run: |
-          source ~/spark-env/bin/activate
-          
-          LAB_TO_RUN="${{ github.event.inputs.lab || 'all' }}"
-          echo "=== Running Production Pipeline ($LAB_TO_RUN) ==="
-          python $GITHUB_WORKSPACE/run_pipeline.py $LAB_TO_RUN
+          unset SPARK_HOME
+          export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
+          echo "=== Running Production Medallion Pipeline ==="
+          python run_pipeline.py --env prod
 
       - name: Upload Production artifacts
         uses: actions/upload-artifact@v7
@@ -49,6 +47,5 @@ jobs:
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Run # | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Lab | ${{ github.event.inputs.lab || 'all' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
