@@ -2,7 +2,7 @@
 """DAT535 Medallion Architecture Pipeline Orchestrator.
 
 Executes the end-to-end CityBikes Medallion pipeline (Bronze Ingestion,
-Silver Core Cleaning & Quarantine, and scaffolded Gold Marts).
+Silver Core Cleaning & Quarantine, and Gold Marts).
 
 Usage:
     python run_pipeline.py --env dev
@@ -43,6 +43,7 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
     """Execute the core Medallion pipeline: Raw Generation, Bronze Ingestion, Silver Cleaning, and Gold Marts."""
     from config.settings import get_env_paths
     from src.bronze.ingest_bronze import run_bronze_ingestion
+    from src.gold.build_gold import run_gold_transformation
     from src.silver.clean_quarantine import run_silver_cleaning
     from src.utils.data_generator import generate_raw_batches
     from src.utils.spark_session import get_spark_session
@@ -83,17 +84,15 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
         f"{silver_metrics['imputed_coords_count']} coordinates imputed."
     )
 
-    # 5. Gold Layer Execution (Scaffolded for Oriol)
-    logger.info("Step 4: Checking Gold Layer Marts...")
-    gold_status = "SCAFFOLDED"
-    try:
-        from src.gold import run_gold_pipeline  # type: ignore
-
-        gold_metrics = run_gold_pipeline(spark, env=env, run_id=run_id)
-        gold_status = "COMPLETED"
-        logger.info(f"Gold marts produced: {gold_metrics}")
-    except (ImportError, AttributeError):
-        logger.info("Gold layer analytics currently scaffolded (pending Oriol's implementation).")
+    # 5. Gold Layer Marts
+    logger.info("Step 4: Executing Gold Layer Marts...")
+    gold_metrics = run_gold_transformation(spark, env, run_id)
+    logger.info(
+        f"Gold Marts Complete: {gold_metrics['station_flow_rows']} station-flow rows, "
+        f"{gold_metrics['user_kpi_rows']} user KPI rows, "
+        f"{gold_metrics['top_corridor_rows']} top corridors, "
+        f"{gold_metrics['weather_ridership_rows']} weather rows."
+    )
 
     elapsed_time = time.time() - start_time
     logger.info(f"Pipeline executed successfully in {elapsed_time:.2f}s.")
@@ -102,7 +101,7 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:
-            f.write("## DAT535 Dev CI - Bronze & Silver Core Summary\n\n")
+            f.write("## DAT535 Medallion Pipeline Summary\n\n")
             f.write(f"- **Run ID:** `{run_id}`\n")
             f.write(f"- **Environment:** `{env}`\n")
             f.write(f"- **Bronze Schema Validation:** `{bronze_receipt['schema_validation_status']}`\n")
@@ -111,20 +110,24 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
             f.write(f"- **Silver Imputed Coordinates:** `{silver_metrics['imputed_coords_count']}`\n")
             f.write(f"- **Silver Valid Cleaned Rows:** `{silver_metrics['valid_cleaned_rows']}`\n")
             f.write(f"- **Silver Quarantined Rows:** `{silver_metrics['quarantined_rows']}` ({silver_metrics['quarantine_rate']*100:.2f}%)\n")
-            f.write(f"- **Gold Layer Status:** `{gold_status}`\n\n")
+            f.write(f"- **Gold Layer Status:** `{gold_metrics['status']}`\n\n")
             f.write("### Quarantine Breakdown by Rule\n\n")
             f.write("| Rule | Quarantined Rows |\n|---|---:|\n")
             for rule, count in silver_metrics["quarantine_breakdown_by_rule"].items():
                 f.write(f"| `{rule}` | {count} |\n")
+            f.write("\n### Gold Marts Summary\n\n")
+            f.write(f"- Station Rebalancing Records: `{gold_metrics['station_flow_rows']}`\n")
+            f.write(f"- User Behavior Records: `{gold_metrics['user_kpi_rows'] + gold_metrics['top_corridor_rows']}`\n")
+            f.write(f"- Weather Ridership Records: `{gold_metrics['weather_ridership_rows']}`\n")
 
-    print("Bronze + Silver Core verification completed successfully.")
+    print("Medallion pipeline completed successfully.")
     return {
         "status": "success",
         "run_id": run_id,
         "elapsed_seconds": elapsed_time,
         "bronze": bronze_receipt,
         "silver": silver_metrics,
-        "gold_status": gold_status,
+        "gold": gold_metrics,
     }
 
 

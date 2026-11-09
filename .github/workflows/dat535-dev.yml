@@ -34,7 +34,7 @@ jobs:
           unset SPARK_HOME
           export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
           export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
-          python -m pytest tests/test_bronze_silver_core.py -v
+          python -m pytest tests/ -v
 
       - name: Execute Dev Pipeline or Bronze/Silver Core Verification
         run: |

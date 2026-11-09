@@ -1,9 +1,5 @@
-"""Gold layer analytics, KPI aggregations, and business-level marts.
+"""Gold layer analytics, KPI aggregations, and business-level marts."""
 
-This package is scaffolded for Oriol's implementation of:
-- Station rebalancing demand & capacity alerts
-- Weather impact correlation on ridership
-- Trip duration & route popularity KPIs
-"""
+from src.gold.build_gold import run_gold_transformation
 
-__all__ = []
+__all__ = ["run_gold_transformation"]
