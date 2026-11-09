@@ -27,15 +27,14 @@ derby.log
 .sparkStaging/
 
 # Local data & temporary output directories
-data/
-raw_landing/
-bronze/
-silver/
-gold/
-tmp/
-.tmp/
+/data/
+/raw_landing/
+/bronze/
+/silver/
+/gold/
 /tmp/
-spark-lab-data/
+/.tmp/
+/spark-lab-data/
 
 # IDE & OS files
 .vscode/
