@@ -3,7 +3,7 @@
 import os
 from typing import Dict
 
-_FALLBACK_BASE_DIR = "/tmp/spark-lab-data"
+_FALLBACK_BASE_DIR = "./data"
 DEFAULT_BASE_DIR: str = os.getenv("DAT535_DATA_DIR", _FALLBACK_BASE_DIR)
 
 NYC_BOUNDS: Dict[str, float] = {
@@ -36,9 +36,9 @@ def get_env_paths(env: str = "dev") -> Dict[str, str]:
         "bronze_trips": f"{base}/{target_env}/bronze/trips",
         "bronze_stations": f"{base}/{target_env}/bronze/stations",
         "bronze_weather": f"{base}/{target_env}/bronze/weather",
-        "bronze_receipt": f"{base}/{target_env}/bronze/_delivery_receipt.json",
-        "silver_cleaned": f"{base}/{target_env}/silver/trips_cleaned",
-        "silver_quarantine": f"{base}/{target_env}/silver/trips_quarantine",
+        "bronze_receipt": f"{base}/{target_env}/bronze/bronze_receipt.json",
+        "silver_cleaned": f"{base}/{target_env}/silver/trips",
+        "silver_quarantine": f"{base}/{target_env}/silver/quarantine/trips",
         "silver_enriched": f"{base}/{target_env}/silver/trips_enriched",
         "silver_quality_report": f"{base}/{target_env}/silver/_quality_report.json",
         "gold_rebalancing": f"{base}/{target_env}/gold/station_rebalancing_mart",

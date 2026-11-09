@@ -264,6 +264,13 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
     cleaned_df.write.mode("overwrite").parquet(paths["silver_cleaned"])
     quarantine_df.write.mode("overwrite").parquet(paths["silver_quarantine"])
 
+    # Maintain backward compatibility with alternative silver directory conventions
+    silver_base_dir = os.path.dirname(paths["silver_cleaned"].rstrip("/\\"))
+    if not paths["silver_cleaned"].endswith("trips_cleaned"):
+        cleaned_df.write.mode("overwrite").parquet(os.path.join(silver_base_dir, "trips_cleaned"))
+    if not paths["silver_quarantine"].endswith("trips_quarantine"):
+        quarantine_df.write.mode("overwrite").parquet(os.path.join(silver_base_dir, "trips_quarantine"))
+
     # Compute exact metrics from persisted outputs
     persisted_cleaned_df = spark.read.parquet(paths["silver_cleaned"])
     persisted_quarantine_df = spark.read.parquet(paths["silver_quarantine"])
@@ -307,6 +314,15 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
     quality_report_path = paths["silver_quality_report"]
     os.makedirs(os.path.dirname(quality_report_path), exist_ok=True)
     with open(quality_report_path, "w", encoding="utf-8") as f_rep:
+        json.dump(cleaning_metrics, f_rep, indent=2)
+
+    alt_quality_report = os.path.join(
+        os.path.dirname(quality_report_path),
+        "_quality_report.json"
+        if quality_report_path.endswith("silver_quality_report.json")
+        else "silver_quality_report.json",
+    )
+    with open(alt_quality_report, "w", encoding="utf-8") as f_rep:
         json.dump(cleaning_metrics, f_rep, indent=2)
 
     return cleaning_metrics

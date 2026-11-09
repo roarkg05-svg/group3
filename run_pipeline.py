@@ -72,7 +72,7 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
     bronze_receipt = run_bronze_ingestion(spark, env=env, run_id=run_id)
     logger.info(
         f"Bronze Ingestion Status: {bronze_receipt['status']} "
-        f"({bronze_receipt['row_counts']['trips']} trips ingested)."
+        f"(receipt created at {paths['bronze_receipt']}, {bronze_receipt['row_counts']['trips']} trips ingested)."
     )
 
     # 4. Silver Layer Core Cleaning, Coordinate Imputation, and 7-Rule Quarantine
@@ -81,7 +81,9 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
     logger.info(
         f"Silver Cleaning Complete: {silver_metrics['valid_cleaned_rows']} valid rows, "
         f"{silver_metrics['quarantined_rows']} quarantined ({silver_metrics['quarantine_rate']*100:.2f}%), "
-        f"{silver_metrics['imputed_coords_count']} coordinates imputed."
+        f"{silver_metrics['duplicates_removed']} duplicates removed, "
+        f"{silver_metrics['imputed_coords_count']} coordinates imputed, "
+        f"7-rule quarantine split: {silver_metrics['quarantine_breakdown_by_rule']}."
     )
 
     # 5. Gold Layer Marts

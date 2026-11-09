@@ -179,6 +179,14 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
     with open(receipt_path, "w", encoding="utf-8") as f_rcpt:
         json.dump(receipt, f_rcpt, indent=2)
 
+    # Maintain backward compatibility with alternative receipt naming
+    alt_receipt_path = os.path.join(
+        os.path.dirname(receipt_path),
+        "_delivery_receipt.json" if receipt_path.endswith("bronze_receipt.json") else "bronze_receipt.json",
+    )
+    with open(alt_receipt_path, "w", encoding="utf-8") as f_rcpt:
+        json.dump(receipt, f_rcpt, indent=2)
+
     return receipt
 
 
