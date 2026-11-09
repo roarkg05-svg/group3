@@ -13,6 +13,7 @@ jobs:
     env:
       DAT535_ENV: dev
       DAT535_DATA_DIR: /tmp/spark-lab-data
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       PYTHONPATH: ${{ github.workspace }}
 
     steps:
@@ -21,19 +22,25 @@ jobs:
 
       - name: Verify Spark & Python environment
         run: |
-          export PATH="/home/ubuntu/spark-env/bin:$PATH"
+          unset SPARK_HOME
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
           which python
           python --version
           java -version
 
       - name: Run Pytest Unit & Integration Suite
         run: |
-          export PATH="/home/ubuntu/spark-env/bin:$PATH"
+          unset SPARK_HOME
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
           python -m pytest tests/test_bronze_silver_core.py -v
 
       - name: Execute Dev Pipeline or Bronze/Silver Core Verification
         run: |
-          export PATH="/home/ubuntu/spark-env/bin:$PATH"
+          unset SPARK_HOME
+          export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+          export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
           if [ -f "run_pipeline.py" ]; then
             echo "Running full Medallion pipeline via run_pipeline.py..."
             python run_pipeline.py --env dev

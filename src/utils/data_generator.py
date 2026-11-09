@@ -244,8 +244,8 @@ def generate_raw_batches(
             "end_station_id": s_end["station_id"],
             "start_lat": f"{start_lat:.6f}",
             "start_lng": f"{start_lng:.6f}",
-            "end_lat": "0.0" if impute_end else f"{true_end_lat:.6f}",
-            "end_lng": "0.0" if impute_end else f"{true_end_lng:.6f}",
+            "end_lat": "" if impute_end else f"{true_end_lat:.6f}",
+            "end_lng": "" if impute_end else f"{true_end_lng:.6f}",
             "member_casual": member_casual,
         }
 

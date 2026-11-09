@@ -28,6 +28,18 @@ def _trim_or_null(col_name: str) -> F.Column:
     return F.when(trimmed == "", F.lit(None).cast(StringType())).otherwise(trimmed)
 
 
+def _normalize_coord(col_name: str) -> F.Column:
+    """Trim coordinate string, normalize empty strings / whitespace / 0.0 to null, cast to double."""
+    raw_str = F.trim(F.col(col_name).cast(StringType()))
+    empty_or_null = raw_str.isNull() | (raw_str == "")
+    casted = F.when(empty_or_null, F.lit(None).cast(DoubleType())).otherwise(
+        raw_str.cast(DoubleType())
+    )
+    return F.when((casted.isNull()) | (casted == 0.0), F.lit(None).cast(DoubleType())).otherwise(
+        casted
+    )
+
+
 def _apply_shape_and_imputation(
     bronze_trips_df: DataFrame, bronze_stations_df: DataFrame
 ) -> DataFrame:
@@ -41,10 +53,10 @@ def _apply_shape_and_imputation(
         .withColumn("member_casual", _trim_or_null("member_casual"))
         .withColumn("started_at", F.to_timestamp(F.trim(F.col("started_at"))))
         .withColumn("ended_at", F.to_timestamp(F.trim(F.col("ended_at"))))
-        .withColumn("start_lat", F.col("start_lat").cast(DoubleType()))
-        .withColumn("start_lng", F.col("start_lng").cast(DoubleType()))
-        .withColumn("end_lat", F.col("end_lat").cast(DoubleType()))
-        .withColumn("end_lng", F.col("end_lng").cast(DoubleType()))
+        .withColumn("start_lat", _normalize_coord("start_lat"))
+        .withColumn("start_lng", _normalize_coord("start_lng"))
+        .withColumn("end_lat", _normalize_coord("end_lat"))
+        .withColumn("end_lng", _normalize_coord("end_lng"))
         .withColumn(
             "trip_duration_min",
             (F.unix_timestamp(F.col("ended_at")) - F.unix_timestamp(F.col("started_at")))
@@ -56,8 +68,8 @@ def _apply_shape_and_imputation(
     station_lookup_df = (
         bronze_stations_df.select(
             F.trim(F.col("station_id").cast(StringType())).alias("_ref_station_id"),
-            F.col("station_lat").cast(DoubleType()).alias("_ref_station_lat"),
-            F.col("station_lng").cast(DoubleType()).alias("_ref_station_lng"),
+            F.col("station_lat").cast(DoubleType()).alias("station_lat"),
+            F.col("station_lng").cast(DoubleType()).alias("station_lng"),
         )
         .filter(F.col("_ref_station_id").isNotNull())
         .dropDuplicates(["_ref_station_id"])
@@ -69,34 +81,32 @@ def _apply_shape_and_imputation(
         how="left",
     )
 
-    missing_or_zero_end = (
-        F.col("end_lat").isNull()
-        | (F.col("end_lat") == 0.0)
-        | F.col("end_lng").isNull()
-        | (F.col("end_lng") == 0.0)
-    )
-    can_impute_end = (
-        missing_or_zero_end
-        & F.col("_ref_station_lat").isNotNull()
-        & F.col("_ref_station_lng").isNotNull()
+    coord_imputed_cond = (
+        (F.col("end_lat").isNull() | F.col("end_lng").isNull())
+        & F.col("station_lat").isNotNull()
+        & F.col("station_lng").isNotNull()
     )
 
     imputed_df = (
         joined_df.withColumn(
-            "end_lat",
-            F.when(can_impute_end, F.col("_ref_station_lat")).otherwise(F.col("end_lat")),
-        )
-        .withColumn(
-            "end_lng",
-            F.when(can_impute_end, F.col("_ref_station_lng")).otherwise(F.col("end_lng")),
+            "_coord_imputed",
+            coord_imputed_cond,
         )
         .withColumn(
             "dq_handling_flag",
-            F.when(can_impute_end, F.lit("IMPUTED_END_COORDS")).otherwise(
+            F.when(coord_imputed_cond, F.lit("IMPUTED_END_COORDS")).otherwise(
                 F.lit("ORIGINAL_COORDS")
             ),
         )
-        .drop("_ref_station_id", "_ref_station_lat", "_ref_station_lng")
+        .withColumn(
+            "end_lat",
+            F.coalesce(F.col("end_lat"), F.col("station_lat")),
+        )
+        .withColumn(
+            "end_lng",
+            F.coalesce(F.col("end_lng"), F.col("station_lng")),
+        )
+        .drop("_ref_station_id", "station_lat", "station_lng")
     )
 
     # Haversine great-circle distance (km) and physical speed (km/h)
@@ -156,7 +166,8 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
     deduplicated_rows = dedup_df.count()
     duplicates_removed_count = bronze_input_rows - deduplicated_rows
     imputed_coords_count = dedup_df.filter(
-        F.col("dq_handling_flag") == "IMPUTED_END_COORDS"
+        (F.col("dq_handling_flag") == "IMPUTED_END_COORDS")
+        | (F.col("_coord_imputed") == True)
     ).count()
 
     # Step 3: Method 3 (Trust - 7-Rule Quarantine Engine, "Flag Don't Delete")

@@ -51,6 +51,48 @@ def run_lab3():
     return pipeline.run()
 
 
+def run_medallion(env="dev"):
+    """Run Medallion pipeline (Bronze + Silver Core) for the given environment."""
+    import os
+    from datetime import datetime, timezone
+    from config.settings import get_env_paths
+    from src.utils.spark_session import get_spark_session
+    from src.utils.data_generator import generate_raw_batches
+    from src.bronze.ingest_bronze import run_bronze_ingestion
+    from src.silver.clean_quarantine import run_silver_cleaning
+
+    run_id = f"pipeline_{env}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    paths = get_env_paths(env)
+
+    logger.info(f"Generating raw batches for environment '{env}'...")
+    generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
+
+    spark = get_spark_session(f"DAT535_Medallion_{env.capitalize()}")
+    logger.info("Running Bronze ingestion...")
+    bronze_receipt = run_bronze_ingestion(spark, env=env, run_id=run_id)
+
+    logger.info("Running Silver core cleaning & quarantine...")
+    silver_metrics = run_silver_cleaning(spark, env=env, run_id=run_id)
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write("## DAT535 Dev CI - Bronze & Silver Core Summary\n\n")
+            f.write(f"- **Run ID:** `{run_id}`\n")
+            f.write(f"- **Environment:** `{env}`\n")
+            f.write(f"- **Bronze Schema Validation:** `{bronze_receipt['schema_validation_status']}`\n")
+            f.write(f"- **Bronze Trips Ingested:** `{bronze_receipt['row_counts']['trips']}`\n")
+            f.write(f"- **Silver Duplicates Removed:** `{silver_metrics['duplicates_removed']}`\n")
+            f.write(f"- **Silver Imputed Coordinates:** `{silver_metrics['imputed_coords_count']}`\n")
+            f.write(f"- **Silver Valid Cleaned Rows:** `{silver_metrics['valid_cleaned_rows']}`\n")
+            f.write(f"- **Silver Quarantined Rows:** `{silver_metrics['quarantined_rows']}` ({silver_metrics['quarantine_rate']*100:.2f}%)\n\n")
+            f.write("### Quarantine Breakdown by Rule\n\n")
+            for rule, count in silver_metrics["quarantine_breakdown_by_rule"].items():
+                f.write(f"| `{rule}` | {count} |\n")
+    print("Bronze + Silver Core verification completed successfully.")
+    return {'status': 'success'}
+
+
 def run_all():
     """Run all labs in sequence (Lab 2 must complete before Lab 3)."""
     logger.info("=" * 60)
@@ -119,8 +161,15 @@ Labs:
     
     parser.add_argument(
         'pipeline',
-        choices=['lab2', 'lab3', 'all'],
+        nargs='?',
+        choices=['lab2', 'lab3', 'all', 'medallion'],
+        default=None,
         help='Pipeline to run'
+    )
+    parser.add_argument(
+        '--env',
+        default='dev',
+        help='Environment name (e.g. dev, prod, test)'
     )
     
     args = parser.parse_args()
@@ -129,11 +178,15 @@ Labs:
     pipeline_map = {
         'lab2': run_lab2,
         'lab3': run_lab3,
-        'all': run_all
+        'all': run_all,
+        'medallion': lambda: run_medallion(args.env),
     }
     
     try:
-        result = pipeline_map[args.pipeline]()
+        if args.pipeline in ('lab2', 'lab3', 'all'):
+            result = pipeline_map[args.pipeline]()
+        else:
+            result = run_medallion(args.env)
         
         # Check status
         if args.pipeline == 'all':
