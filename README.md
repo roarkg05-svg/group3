@@ -29,8 +29,9 @@
    - [Environment Setup](#environment-setup)
    - [Running the Test Suite](#running-the-test-suite)
    - [Running the Pipeline Locally or on VM](#running-the-pipeline-locally-or-on-vm)
-6. [Handover Checklist for Oriol](#handover-checklist-for-oriol)
-7. [Archived Coursework (`labs/`)](#archived-coursework-labs)
+6. [Team Handover & Next Steps](#team-handover--next-steps)
+7. [Handover Checklist for Oriol](#handover-checklist-for-oriol)
+8. [Archived Coursework (`labs/`)](#archived-coursework-labs)
 
 ---
 
@@ -278,6 +279,21 @@ python run_pipeline.py --env test
 # Prod environment (/tmp/spark-lab-data/prod/)
 python run_pipeline.py --env prod
 ```
+
+---
+
+## Team Handover & Next Steps
+
+For an exhaustive, production-grade technical specification detailing how Oriol should build the remaining 50% of the project (Gold Layer marts, KPI analytics, end-to-end pipeline wiring, and the Pytest suite), refer directly to the master handover manual:
+
+👉 **[`HANDOVER_ORIOL.md`](HANDOVER_ORIOL.md)**
+
+It provides comprehensive specifications including:
+- **Silver Output Contract:** Data schemas, nullability rules, coordinate imputation flags, and Parquet storage locations.
+- **Gold Mart Specifications:** Architectures and transformations for `mart_station_flow.py`, `mart_user_behavior.py`, `mart_weather_ridership.py`, and `build_gold.py`.
+- **Pipeline Integration:** Instructions to wire the Gold runner into `run_pipeline.py` with GitHub step summary metrics.
+- **Test Suite (`tests/test_gold.py`):** Unit and integration test specifications validating net flow conservation, join integrity, and non-null constraints.
+- **VM Environment Guardrails:** Commands to prevent runtime JVM/PySpark version conflicts on `spark-group03`.
 
 ---
 
