@@ -65,7 +65,7 @@ flowchart LR
     subgraph Gold["Gold Layer (Analytics Marts - Oriol)"]
         G1[("gold_rebalancing<br/>(Station Demand Mart)")]
         G2[("gold_weather_impact<br/>(Weather Elasticity Mart)")]
-        G3[("gold_kpi_summary<br/>(Trip Duration & Velocity)")]
+        G3[("user_behavior_mart<br/>(Member vs Casual KPIs & Top Corridors)")]
     end
 
     Raw -->|Batch Ingest + Metadata Tagging| Bronze
@@ -98,15 +98,19 @@ group3/
 │   │   ├── __init__.py
 │   │   └── clean_quarantine.py         # Dedup, coordinate imputation & 7-rule quarantine engine
 │   ├── gold/
-│   │   ├── __init__.py                 # Scaffolded package for Oriol's analytical marts
-│   │   └── .gitkeep
+│   │   ├── __init__.py
+│   │   ├── mart_station_flow.py        # Daily station balance, turnover & peak hour
+│   │   ├── mart_user_behavior.py       # Member vs casual KPIs & top corridors
+│   │   ├── mart_weather_ridership.py   # Trip volume, distance & speed per weather bin
+│   │   └── build_gold.py               # Gold orchestrator, Silver reconciliation & ready signal
 │   └── utils/
 │       ├── __init__.py
 │       ├── spark_session.py            # Optimized SparkSession builder with dynamic shuffle
 │       └── data_generator.py           # Multi-batch synthetic data generator with controlled anomalies
 ├── tests/
 │   ├── __init__.py
-│   └── test_bronze_silver_core.py      # Pytest integration and validation test suite
+│   ├── test_bronze_silver_core.py      # Pytest integration and validation test suite
+│   └── test_gold.py                    # Gold mart, reconciliation & ready-signal tests
 ├── labs/                               # Archived coursework, installation scripts & notebooks
 │   ├── lab1_1_setup_guide.md           # Lab 1 setup instructions
 │   ├── lab1_install-spark.sh           # Spark installation script for Ubuntu VMs
@@ -177,10 +181,12 @@ group3/
 
 - **Target Directory:** [`src/gold/`](src/gold/)
 - **Assigned Developer:** Oriol Garcia Torcal
-- **Planned Analytical Views:**
-  1. `gold_rebalancing`: Station demand balance (trips inbound vs. outbound, hourly turnover, docking capacity strain).
-  2. `gold_weather_impact`: Elasticity of bike ridership relative to rain precipitation ($\text{mm}$) and wind speed ($\text{km/h}$).
-  3. `gold_kpi_summary`: Average trip duration, speed distributions, and subscriber vs. casual ridership trends.
+- **Marts:**
+  1. `station_rebalancing_mart`: One row per station and day with inbound and outbound trips, net flow, turnover ratio and peak departure hour. Stations missing from the catalog are kept and flagged.
+  2. `user_behavior_mart/kpis`: Duration, speed and distance per rider tier and bike type.
+  3. `user_behavior_mart/top_corridors`: The 10 most travelled station pairs per rider tier.
+  4. `weather_commute_impact`: Trip volume, distance and speed per temperature and rain bin.
+- **Publication gate:** `_READY_SIGNAL.json` reports `SUCCESS` only when the marts reconcile with `silver_cleaned`. Otherwise it reports `FAILED` and the pipeline stops.
 
 ---
 
@@ -301,17 +307,14 @@ It provides comprehensive specifications including:
 
 Oriol, here is the task checklist to complete the project and take it over the finish line:
 
-- [ ] **1. Implement Gold Layer Marts in [`src/gold/`](src/gold/):**
-  - Create `src/gold/aggregate_gold.py`.
-  - Build `gold_rebalancing` (aggregate departures vs. arrivals per station per hour).
-  - Build `gold_weather_impact` (join clean trips with NOAA weather on hour timestamp).
-  - Build `gold_kpi_summary` (speed distribution, duration percentiles, membership breakdown).
-- [ ] **2. Connect Gold Execution to [`run_pipeline.py`](run_pipeline.py):**
-  - Implement `run_gold_pipeline(spark, env, run_id)` inside `src/gold/` and import it in `run_pipeline.py`.
-- [ ] **3. Write Pytest Suite for Gold:**
+- [x] **1. Implement Gold Layer Marts in [`src/gold/`](src/gold/):**
+  - Station flow, user behavior and weather marts, orchestrated by `src/gold/build_gold.py`.
+- [x] **2. Connect Gold Execution to [`run_pipeline.py`](run_pipeline.py):**
+  - `run_gold_transformation(spark, env, run_id)` runs after Silver.
+- [x] **3. Write Pytest Suite for Gold:**
   - Create `tests/test_gold.py`.
   - Validate that `silver_cleaned` transforms into the correct KPI metrics without nulls or division-by-zero.
-- [ ] **4. Verify CI/CD on `dev`:**
+- [x] **4. Verify CI/CD on `dev`:**
   - Push changes to `dev` and ensure the GitHub Actions runner (`spark-group03`) executes all tests cleanly.
 - [ ] **5. Create Release Pull Request:**
   - Open a PR from `dev` to `main`.

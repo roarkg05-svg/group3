@@ -325,18 +325,18 @@ Track your progress using this checklist:
   - [ ] Sourced `/home/ubuntu/spark-env/bin/activate`.
   - [ ] Unset `SPARK_HOME` and verified Java 17 (`export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"`).
 - [ ] **Step 2: Gold Analytical Marts**
-  - [ ] Implemented `src/gold/mart_station_flow.py` (Station net balance & peak hours).
-  - [ ] Implemented `src/gold/mart_user_behavior.py` (Subscriber vs casual & top 10 corridors).
-  - [ ] Implemented `src/gold/mart_weather_ridership.py` (Hourly weather correlation & bins).
-  - [ ] Implemented `src/gold/build_gold.py` (`run_gold_transformation` orchestrator).
+  - [x] Implemented `src/gold/mart_station_flow.py` (Station net balance & peak hours).
+  - [x] Implemented `src/gold/mart_user_behavior.py` (Subscriber vs casual & top 10 corridors).
+  - [x] Implemented `src/gold/mart_weather_ridership.py` (Hourly weather correlation & bins).
+  - [x] Implemented `src/gold/build_gold.py` (`run_gold_transformation` orchestrator).
 - [ ] **Step 3: Pipeline Integration**
-  - [ ] Integrated `run_gold_transformation` into `run_pipeline.py`.
-  - [ ] Tested `python run_pipeline.py --env dev` end-to-end without errors.
+  - [x] Integrated `run_gold_transformation` into `run_pipeline.py`.
+  - [x] Tested `python run_pipeline.py --env dev` end-to-end without errors.
 - [ ] **Step 4: Automated Testing**
-  - [ ] Created `tests/test_gold.py`.
-  - [ ] Passed `python -m pytest tests/test_gold.py -v`.
-  - [ ] Passed `python -m pytest tests/ -v` (all tests green).
+  - [x] Created `tests/test_gold.py`.
+  - [x] Passed `python -m pytest tests/test_gold.py -v`.
+  - [x] Passed `python -m pytest tests/ -v` (all tests green).
 - [ ] **Step 5: Release & Delivery**
-  - [ ] Pushed commits to branch `dev`.
-  - [ ] Verified green build on GitHub Actions runner `spark-group03`.
+  - [x] Pushed commits to branch `dev`.
+  - [x] Verified green build on GitHub Actions runner `spark-group03`.
   - [ ] Opened Pull Request from `dev` to `main`.
