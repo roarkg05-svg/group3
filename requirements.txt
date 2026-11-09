@@ -1,0 +1,21 @@
+# DAT535 Data Engineering - Group 3: Medallion Architecture Pipeline
+# Python & PySpark Dependencies
+
+# Core Engine & Distributed Processing
+pyspark>=4.0.0,<5.0.0
+py4j>=0.10.9.7
+
+# Data Serialization & Fast Parquet I/O
+pyarrow>=14.0.0
+pandas>=2.0.0
+
+# Configuration & Utilities
+pyyaml>=6.0.0
+
+# Testing & Quality Assurance
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Linting & Formatting (Optional Dev Tools)
+flake8>=6.0.0
+black>=23.0.0

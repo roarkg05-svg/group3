@@ -1,79 +1,104 @@
 #!/usr/bin/env python3
-"""
-DAT535 Lab Pipeline Orchestrator
-=================================
+"""DAT535 Medallion Architecture Pipeline Orchestrator.
 
-Run individual labs or all labs in sequence.
+Executes the end-to-end CityBikes Medallion pipeline (Bronze Ingestion,
+Silver Core Cleaning & Quarantine, and scaffolded Gold Marts).
 
 Usage:
-    python run_pipeline.py lab2          # Run Lab 2 only
-    python run_pipeline.py lab3          # Run Lab 3 only
-    python run_pipeline.py all           # Run all labs (Lab 2 then Lab 3)
-    python run_pipeline.py --help        # Show help
+    python run_pipeline.py --env dev
+    python run_pipeline.py --env test
+    python run_pipeline.py --env prod
+    python run_pipeline.py --help
+
+Archived Coursework Labs (Optional):
+    python run_pipeline.py lab2
+    python run_pipeline.py lab3
+    python run_pipeline.py all
 """
 
-import sys
 import argparse
+import json
 import logging
+import os
+import sys
 import time
+from datetime import datetime, timezone
+from typing import Any, Dict
+
+# Ensure labs directory is discoverable if archived labs are invoked
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+LABS_DIR = os.path.join(REPO_ROOT, "labs")
+if LABS_DIR not in sys.path:
+    sys.path.insert(0, LABS_DIR)
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DAT535_Orchestrator")
 
 
-def run_lab2():
-    """Run Lab 2: Spark Fundamentals & the Medallion Architecture."""
-    logger.info("=" * 60)
-    logger.info("RUNNING LAB 2: SPARK FUNDAMENTALS & MEDALLION ARCHITECTURE")
-    logger.info("=" * 60)
-    
-    from lab2_pipeline import Lab2Pipeline
-    pipeline = Lab2Pipeline()
-    return pipeline.run()
-
-
-def run_lab3():
-    """Run Lab 3: Advanced Spark & Production Patterns.
-
-    Requires Lab 2 to have already run, since Lab 3 loads the shared Silver-layer
-    dataset that Lab 2 produces.
-    """
-    logger.info("=" * 60)
-    logger.info("RUNNING LAB 3: ADVANCED SPARK & PRODUCTION PATTERNS")
-    logger.info("=" * 60)
-    
-    from lab3_pipeline import Lab3Pipeline
-    pipeline = Lab3Pipeline()
-    return pipeline.run()
-
-
-def run_medallion(env="dev"):
-    """Run Medallion pipeline (Bronze + Silver Core) for the given environment."""
-    import os
-    from datetime import datetime, timezone
+def run_medallion(env: str = "dev") -> Dict[str, Any]:
+    """Execute the core Medallion pipeline: Raw Generation, Bronze Ingestion, Silver Cleaning, and Gold Marts."""
     from config.settings import get_env_paths
-    from src.utils.spark_session import get_spark_session
-    from src.utils.data_generator import generate_raw_batches
     from src.bronze.ingest_bronze import run_bronze_ingestion
     from src.silver.clean_quarantine import run_silver_cleaning
+    from src.utils.data_generator import generate_raw_batches
+    from src.utils.spark_session import get_spark_session
 
+    start_time = time.time()
     run_id = f"pipeline_{env}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     paths = get_env_paths(env)
 
-    logger.info(f"Generating raw batches for environment '{env}'...")
-    generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
+    logger.info("=" * 70)
+    logger.info(f"STARTING MEDALLION PIPELINE [ENV: {env.upper()}] [RUN_ID: {run_id}]")
+    logger.info("=" * 70)
 
+    # 1. Raw Batch Bootstrap
+    logger.info("Step 1: Checking raw data landing directory...")
+    gen_info = generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
+    logger.info(
+        f"Raw data ready: {gen_info['total_trip_rows']} trips, "
+        f"{gen_info['stations_count']} stations, {gen_info['weather_rows']} weather records."
+    )
+
+    # 2. Spark Session Initialization
     spark = get_spark_session(f"DAT535_Medallion_{env.capitalize()}")
-    logger.info("Running Bronze ingestion...")
+
+    # 3. Bronze Layer Ingestion
+    logger.info("Step 2: Executing Bronze Layer Ingestion...")
     bronze_receipt = run_bronze_ingestion(spark, env=env, run_id=run_id)
+    logger.info(
+        f"Bronze Ingestion Status: {bronze_receipt['status']} "
+        f"({bronze_receipt['row_counts']['trips']} trips ingested)."
+    )
 
-    logger.info("Running Silver core cleaning & quarantine...")
+    # 4. Silver Layer Core Cleaning, Coordinate Imputation, and 7-Rule Quarantine
+    logger.info("Step 3: Executing Silver Core Cleaning & Quarantine...")
     silver_metrics = run_silver_cleaning(spark, env=env, run_id=run_id)
+    logger.info(
+        f"Silver Cleaning Complete: {silver_metrics['valid_cleaned_rows']} valid rows, "
+        f"{silver_metrics['quarantined_rows']} quarantined ({silver_metrics['quarantine_rate']*100:.2f}%), "
+        f"{silver_metrics['imputed_coords_count']} coordinates imputed."
+    )
 
+    # 5. Gold Layer Execution (Scaffolded for Oriol)
+    logger.info("Step 4: Checking Gold Layer Marts...")
+    gold_status = "SCAFFOLDED"
+    try:
+        from src.gold import run_gold_pipeline  # type: ignore
+
+        gold_metrics = run_gold_pipeline(spark, env=env, run_id=run_id)
+        gold_status = "COMPLETED"
+        logger.info(f"Gold marts produced: {gold_metrics}")
+    except (ImportError, AttributeError):
+        logger.info("Gold layer analytics currently scaffolded (pending Oriol's implementation).")
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Pipeline executed successfully in {elapsed_time:.2f}s.")
+
+    # 6. Publish Summary to GitHub Actions if available
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:
@@ -85,121 +110,92 @@ def run_medallion(env="dev"):
             f.write(f"- **Silver Duplicates Removed:** `{silver_metrics['duplicates_removed']}`\n")
             f.write(f"- **Silver Imputed Coordinates:** `{silver_metrics['imputed_coords_count']}`\n")
             f.write(f"- **Silver Valid Cleaned Rows:** `{silver_metrics['valid_cleaned_rows']}`\n")
-            f.write(f"- **Silver Quarantined Rows:** `{silver_metrics['quarantined_rows']}` ({silver_metrics['quarantine_rate']*100:.2f}%)\n\n")
+            f.write(f"- **Silver Quarantined Rows:** `{silver_metrics['quarantined_rows']}` ({silver_metrics['quarantine_rate']*100:.2f}%)\n")
+            f.write(f"- **Gold Layer Status:** `{gold_status}`\n\n")
             f.write("### Quarantine Breakdown by Rule\n\n")
+            f.write("| Rule | Quarantined Rows |\n|---|---:|\n")
             for rule, count in silver_metrics["quarantine_breakdown_by_rule"].items():
                 f.write(f"| `{rule}` | {count} |\n")
+
     print("Bronze + Silver Core verification completed successfully.")
-    return {'status': 'success'}
+    return {
+        "status": "success",
+        "run_id": run_id,
+        "elapsed_seconds": elapsed_time,
+        "bronze": bronze_receipt,
+        "silver": silver_metrics,
+        "gold_status": gold_status,
+    }
 
 
-def run_all():
-    """Run all labs in sequence (Lab 2 must complete before Lab 3)."""
-    logger.info("=" * 60)
-    logger.info("RUNNING ALL LABS")
-    logger.info("=" * 60)
-    
+def run_lab2() -> Dict[str, Any]:
+    """Run archived Lab 2 from labs/ directory."""
+    logger.info("Running archived Lab 2 pipeline from labs/...")
+    from lab2_pipeline import Lab2Pipeline
+
+    pipeline = Lab2Pipeline()
+    return pipeline.run()
+
+
+def run_lab3() -> Dict[str, Any]:
+    """Run archived Lab 3 from labs/ directory."""
+    logger.info("Running archived Lab 3 pipeline from labs/...")
+    from lab3_pipeline import Lab3Pipeline
+
+    pipeline = Lab3Pipeline()
+    return pipeline.run()
+
+
+def run_all_labs() -> Dict[str, Any]:
+    """Run archived Lab 2 & Lab 3 in sequence."""
+    logger.info("Running all archived coursework labs...")
     results = {}
-    total_start = time.time()
-    
-    # Lab 2 (generates and saves the shared dataset used by Lab 3)
-    try:
-        results['lab2'] = run_lab2()
-        logger.info("✓ Lab 2 completed successfully")
-    except Exception as e:
-        logger.error(f"✗ Lab 2 failed: {e}")
-        results['lab2'] = {'status': 'failed', 'error': str(e)}
-    
-    # Lab 3 (only attempt if Lab 2 succeeded, since it depends on Lab 2's output)
-    if results['lab2'].get('status') == 'success':
-        try:
-            results['lab3'] = run_lab3()
-            logger.info("✓ Lab 3 completed successfully")
-        except Exception as e:
-            logger.error(f"✗ Lab 3 failed: {e}")
-            results['lab3'] = {'status': 'failed', 'error': str(e)}
+    results["lab2"] = run_lab2()
+    if results["lab2"].get("status") == "success":
+        results["lab3"] = run_lab3()
     else:
-        logger.warning("Skipping Lab 3 because Lab 2 did not complete successfully")
-        results['lab3'] = {'status': 'skipped'}
-    
-    total_time = time.time() - total_start
-    
-    # Summary
-    logger.info("=" * 60)
-    logger.info("ALL LABS SUMMARY")
-    logger.info("=" * 60)
-    
-    for lab, result in results.items():
-        status = result.get('status', 'unknown')
-        elapsed = result.get('elapsed_time', 0)
-        logger.info(f"  {lab}: {status} ({elapsed:.2f}s)")
-    
-    logger.info(f"  Total time: {total_time:.2f}s")
-    
+        results["lab3"] = {"status": "skipped"}
     return results
 
 
-def main():
-    """Main entry point."""
+def main() -> int:
+    """Parse CLI arguments and dispatch pipeline execution."""
     parser = argparse.ArgumentParser(
-        description="DAT535 Lab Pipeline Orchestrator",
+        description="DAT535 Medallion Pipeline & Lab Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    python run_pipeline.py lab2          # Run Lab 2 only
-    python run_pipeline.py lab3          # Run Lab 3 only
-    python run_pipeline.py all           # Run all labs
-
-Labs:
-    lab2    Spark Fundamentals & Medallion Architecture - DataFrame/RDD/SQL
-            conversions, MapReduce, I/O, Bronze/Silver/Gold layers
-    lab3    Advanced Spark & Production Patterns - window functions, joins,
-            partitioning, caching, UDFs, streaming, optimization
-            (requires Lab 2's shared dataset to have been generated first)
-        """
     )
-    
     parser.add_argument(
-        'pipeline',
-        nargs='?',
-        choices=['lab2', 'lab3', 'all', 'medallion'],
+        "pipeline",
+        nargs="?",
+        choices=["medallion", "lab2", "lab3", "all"],
         default=None,
-        help='Pipeline to run'
+        help="Optional specific pipeline or archived lab to run",
     )
     parser.add_argument(
-        '--env',
-        default='dev',
-        help='Environment name (e.g. dev, prod, test)'
+        "--env",
+        default=os.getenv("DAT535_ENV", "dev"),
+        choices=["dev", "test", "prod"],
+        help="Target environment (default: dev)",
     )
-    
+
     args = parser.parse_args()
-    
-    # Dispatch to appropriate pipeline
-    pipeline_map = {
-        'lab2': run_lab2,
-        'lab3': run_lab3,
-        'all': run_all,
-        'medallion': lambda: run_medallion(args.env),
-    }
-    
+
     try:
-        if args.pipeline in ('lab2', 'lab3', 'all'):
-            result = pipeline_map[args.pipeline]()
+        if args.pipeline == "lab2":
+            res = run_lab2()
+            return 0 if res.get("status") == "success" else 1
+        elif args.pipeline == "lab3":
+            res = run_lab3()
+            return 0 if res.get("status") == "success" else 1
+        elif args.pipeline == "all":
+            res = run_all_labs()
+            return 0 if all(r.get("status") == "success" for r in res.values()) else 1
         else:
-            result = run_medallion(args.env)
-        
-        # Check status
-        if args.pipeline == 'all':
-            all_success = all(
-                r.get('status') == 'success' 
-                for r in result.values()
-            )
-            return 0 if all_success else 1
-        else:
-            return 0 if result.get('status') == 'success' else 1
-            
-    except Exception as e:
-        logger.error(f"Pipeline execution failed: {e}")
+            # Default: run the core Medallion pipeline
+            res = run_medallion(env=args.env)
+            return 0 if res.get("status") == "success" else 1
+    except Exception as exc:
+        logger.error(f"Pipeline execution failed: {exc}", exc_info=True)
         return 1
 
 
