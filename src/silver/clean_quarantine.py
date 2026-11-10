@@ -291,35 +291,50 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
     )
 
     before_and_after_comparison: Dict[str, Any] = {
-        "missing_critical_keys": {
-            "before_bronze": quarantine_breakdown_by_rule["MISSING_CRITICAL_KEY"],
+        "duplicate_ride_ids": {
+            "before_bronze": duplicates_removed_count,
             "after_silver_clean": 0,
-            "action_taken": "Quarantined under Rule 1 (Flag, Don't Delete)",
+            "action_taken": "Deduplicated via Window row_number on ingestion timestamp DESC",
         },
         "missing_or_zero_coordinates": {
             "before_bronze": imputed_coords_count,
             "after_silver_clean": 0,
             "action_taken": "Imputed using GBFS station catalog lat/lng",
         },
-        "duplicate_ride_ids": {
-            "before_bronze": duplicates_removed_count,
+        "rule_1_missing_critical_keys": {
+            "before_bronze": quarantine_breakdown_by_rule["MISSING_CRITICAL_KEY"],
             "after_silver_clean": 0,
-            "action_taken": "Deduplicated via Window row_number on ingestion timestamp DESC",
+            "action_taken": "Quarantined under Rule 1 (Flag, Don't Delete)",
         },
-        "false_unlocks_under_60s": {
+        "rule_2_negative_or_zero_duration": {
+            "before_bronze": quarantine_breakdown_by_rule["NEGATIVE_OR_ZERO_DURATION"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 2 (duration <= 0m)",
+        },
+        "rule_3_false_unlock_under_60s": {
             "before_bronze": quarantine_breakdown_by_rule["FALSE_UNLOCK_UNDER_60S"],
             "after_silver_clean": 0,
-            "action_taken": "Quarantined under Rule 3",
+            "action_taken": "Quarantined under Rule 3 (duration < 60s)",
         },
-        "unphysical_speeds": {
+        "rule_4_lost_or_stolen_over_24h": {
+            "before_bronze": quarantine_breakdown_by_rule["LOST_OR_STOLEN_OVER_24H"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 4 (duration > 24h)",
+        },
+        "rule_5_circular_abandoned_trip": {
+            "before_bronze": quarantine_breakdown_by_rule["CIRCULAR_ABANDONED_TRIP"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 5 (same dock, <3m, <50m)",
+        },
+        "rule_6_impossible_physical_speed": {
             "before_bronze": quarantine_breakdown_by_rule["IMPOSSIBLE_PHYSICAL_SPEED"],
             "after_silver_clean": 0,
             "action_taken": "Quarantined under Rule 6 (>45 km/h classic, >55 km/h e-bike)",
         },
-        "out_of_nyc_bounds": {
+        "rule_7_out_of_nyc_bounds": {
             "before_bronze": quarantine_breakdown_by_rule["OUT_OF_NYC_BOUNDS"],
             "after_silver_clean": 0,
-            "action_taken": "Quarantined under Rule 7",
+            "action_taken": "Quarantined under Rule 7 (outside NYC bounding box)",
         },
         "accepted_clean_records": {
             "count": valid_cleaned_rows,

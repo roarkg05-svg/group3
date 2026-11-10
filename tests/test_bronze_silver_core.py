@@ -144,6 +144,10 @@ def test_bronze_ingestion_and_silver_cleaning_end_to_end(
         assert rule_name in breakdown
         assert breakdown[rule_name] > 0, f"Expected > 0 quarantined rows for {rule_name}"
 
+    assert "before_and_after_comparison" in metrics
+    assert metrics["before_and_after_comparison"]["duplicate_ride_ids"]["after_silver_clean"] == 0
+    assert metrics["before_and_after_comparison"]["missing_or_zero_coordinates"]["after_silver_clean"] == 0
+
     cleaned_df = spark.read.parquet(isolated_env["silver_cleaned"])
     quarantine_df = spark.read.parquet(isolated_env["silver_quarantine"])
 

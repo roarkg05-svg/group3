@@ -215,12 +215,28 @@ def run_medallion(
         if os.path.exists(paths["gold_rebalancing"]):
             flow_df = spark.read.parquet(paths["gold_rebalancing"])
             flow_summary = (
-                flow_df.groupBy("station_name", "region_id")
+                flow_df.withColumn(
+                    "station_display",
+                    F.coalesce(
+                        F.col("station_name"),
+                        F.concat(F.lit("Station "), F.col("station_id")),
+                    ),
+                )
+                .groupBy("station_id", "station_display", "region_id")
                 .agg(
                     F.sum("outbound_trips").alias("outbound"),
                     F.sum("inbound_trips").alias("inbound"),
                     F.sum("net_flow").alias("net_flow"),
                     F.round(F.avg("turnover_ratio"), 1).alias("avg_turnover"),
+                )
+                .select(
+                    "station_id",
+                    F.col("station_display").alias("station_name"),
+                    "region_id",
+                    "outbound",
+                    "inbound",
+                    "net_flow",
+                    "avg_turnover",
                 )
                 .orderBy(F.col("outbound").desc())
                 .limit(5)

@@ -56,13 +56,14 @@ flowchart LR
         BR["bronze_receipt.json<br/>(Delivery Audit)"]
     end
 
-    subgraph Silver["Silver Core Layer (Method 1 + 2 + 3)"]
-        SC[("silver_cleaned<br/>(Deduplicated & Enriched)")]
+    subgraph Silver["Silver Core Layer (Method 1 + 2 + 3 + 4)"]
+        SC[("silver_cleaned<br/>(Deduplicated & Imputed)")]
+        SE[("silver_enriched<br/>(Station & Calendar Conformed)")]
         SQ[("silver_quarantine<br/>(7-Rule Violations)")]
-        SR["silver_quality_report.json"]
+        SR["silver_quality_report.json<br/>(Before vs After Evidence)"]
     end
 
-    subgraph Gold["Gold Layer (Analytics Marts - Oriol)"]
+    subgraph Gold["Gold Layer (Analytics Marts)"]
         G1[("gold_rebalancing<br/>(Station Demand Mart)")]
         G2[("gold_weather_impact<br/>(Weather Elasticity Mart)")]
         G3[("user_behavior_mart<br/>(Member vs Casual KPIs & Top Corridors)")]
@@ -96,7 +97,8 @@ group3/
 │   │   └── ingest_bronze.py            # Raw batch ingestion, metadata tagging & delivery receipts
 │   ├── silver/
 │   │   ├── __init__.py
-│   │   └── clean_quarantine.py         # Dedup, coordinate imputation & 7-rule quarantine engine
+│   │   ├── clean_quarantine.py         # Dedup, coordinate imputation & 7-rule quarantine engine
+│   │   └── enrich_conform.py           # Broadcast station dimension join & calendar conformance
 │   ├── gold/
 │   │   ├── __init__.py
 │   │   ├── mart_station_flow.py        # Daily station balance, turnover & peak hour
@@ -106,7 +108,8 @@ group3/
 │   └── utils/
 │       ├── __init__.py
 │       ├── spark_session.py            # Optimized SparkSession builder with dynamic shuffle
-│       └── data_generator.py           # Multi-batch synthetic data generator with controlled anomalies
+│       ├── data_generator.py           # Multi-batch synthetic data generator with controlled anomalies
+│       └── real_data_downloader.py     # Live Citi Bike S3, GBFS & Open-Meteo NOAA data downloader
 ├── tests/
 │   ├── __init__.py
 │   ├── test_bronze_silver_core.py      # Pytest integration and validation test suite
@@ -162,7 +165,7 @@ group3/
 
 | Rule Name | Condition / Threshold | Explanation |
 |---|---|---|
-| `MISSING_CRITICAL_KEY` | `ride_id IS NULL \| started_at IS NULL \| ended_at IS NULL \| start_station_id IS NULL` | Missing required foreign keys or timestamps |
+| `MISSING_CRITICAL_KEY` | `ride_id IS NULL \| started_at IS NULL \| ended_at IS NULL \| start_station_id IS NULL \| end_station_id IS NULL` | Missing required foreign keys or timestamps |
 | `NEGATIVE_OR_ZERO_DURATION` | `trip_duration_min <= 0.0` | Inverted or zero timestamps |
 | `FALSE_UNLOCK_UNDER_60S` | `0.0 < trip_duration_min < 1.0` | False unlock / immediate cancellation |
 | `LOST_OR_STOLEN_OVER_24H` | `trip_duration_min > 1440.0` | Unreturned or abandoned bike |
@@ -170,10 +173,15 @@ group3/
 | `IMPOSSIBLE_PHYSICAL_SPEED` | Classic $> 45.0\text{ km/h}$ or Electric $> 55.0\text{ km/h}$ | GPS telematics glitch or vehicle transport |
 | `OUT_OF_NYC_BOUNDS` | Lat outside $[40.45, 40.95]$ or Lng outside $[-74.30, -73.65]$ | Coordinate corruption outside NYC region |
 
+- **Method 4 (Enrichment & Conformance — [`src/silver/enrich_conform.py`](src/silver/enrich_conform.py)):**
+  - Executes a broadcast left join (`F.broadcast`) against the deduplicated GBFS station dimension table to eliminate network shuffle across trip partitions.
+  - Attaches station names, borough/region identifiers, and dock capacities (`start_station_name`, `end_station_name`, `start_capacity`, `end_capacity`, `start_region_id`, `end_region_id`).
+  - Derives calendar dimensions (`trip_date`, `hour_of_day`, `day_of_week`, `is_weekend`) and catalog conformance indicators (`is_start_catalog_station`, `is_end_catalog_station`).
 - **Outputs:**
   - `silver_cleaned`: Pristine dataset ready for analytical aggregation.
+  - `silver_enriched`: Conformed dataset enriched with station dimensions and calendar attributes.
   - `silver_quarantine`: Quarantined anomaly records with multi-rule diagnostics.
-  - `silver_quality_report.json`: Metrics tracking deduplication, coordinate imputation, and quarantine rates against quality gates.
+  - `_quality_report.json`: Metrics tracking deduplication, coordinate imputation, quarantine rates, and **Before-vs-After Quality Evidence** (`before_and_after_comparison`).
 
 ---
 
@@ -258,10 +266,10 @@ java -version     # OpenJDK 17.0.x
 
 ### Running the Test Suite
 
-Execute the full suite of unit and end-to-end integration tests:
+Execute the full suite of 11 unit and end-to-end integration tests across Bronze, Silver, and Gold:
 
 ```bash
-python -m pytest tests/test_bronze_silver_core.py -v
+python -m pytest tests/ -v
 ```
 
 Expected output:
@@ -269,20 +277,29 @@ Expected output:
 tests/test_bronze_silver_core.py::test_config_paths_and_thresholds PASSED
 tests/test_bronze_silver_core.py::test_generate_raw_batches_deterministic PASSED
 tests/test_bronze_silver_core.py::test_bronze_ingestion_and_silver_cleaning_end_to_end PASSED
+tests/test_gold.py::test_station_flow_conservation PASSED
+tests/test_gold.py::test_station_flow_keeps_stations_missing_from_catalog PASSED
+tests/test_gold.py::test_peak_departure_hour_tie_keeps_one_row_per_station_day PASSED
+tests/test_gold.py::test_weather_join_integrity PASSED
+tests/test_gold.py::test_weather_mart_covers_clean_trips PASSED
+tests/test_gold.py::test_user_behavior_kpis PASSED
+tests/test_gold.py::test_gold_parquet_artifacts_exist PASSED
+tests/test_gold.py::test_failed_reconciliation_blocks_ready_signal PASSED
 ```
 
 ### Running the Pipeline Locally or on VM
 
-Execute the master orchestrator to run Raw Generation, Bronze Ingestion, and Silver Cleaning:
+Execute the master orchestrator in either **real data mode** (live Citi Bike S3, GBFS stations, and Open-Meteo NOAA historical weather) or **synthetic mode** (fast deterministic benchmark with controlled anomalies across all 7 rules):
 
 ```bash
-# Dev environment (/tmp/spark-lab-data/dev/)
-python run_pipeline.py --env dev
+# Real Data Mode — Citi Bike S3 + GBFS + NOAA Weather (115,558 real trips)
+python run_pipeline.py --env dev --source real
 
-# Test environment (/tmp/spark-lab-data/test/)
+# Deterministic Synthetic Mode (fast CI/CD benchmark, 35,000 trips)
+python run_pipeline.py --env dev --source synthetic
+
+# Test & Production environments
 python run_pipeline.py --env test
-
-# Prod environment (/tmp/spark-lab-data/prod/)
 python run_pipeline.py --env prod
 ```
 
@@ -290,7 +307,7 @@ python run_pipeline.py --env prod
 
 ## Team Handover & Next Steps
 
-For an exhaustive, production-grade technical specification detailing how Oriol should build the remaining 50% of the project (Gold Layer marts, KPI analytics, end-to-end pipeline wiring, and the Pytest suite), refer directly to the master handover manual:
+For an exhaustive, production-grade technical specification detailing how the Gold Layer marts, KPI analytics, end-to-end pipeline wiring, and the Pytest suite were designed and integrated, refer directly to the master handover manual:
 
 👉 **[`HANDOVER_ORIOL.md`](HANDOVER_ORIOL.md)**
 
@@ -305,20 +322,19 @@ It provides comprehensive specifications including:
 
 ## Handover Checklist for Oriol
 
-Oriol, here is the task checklist to complete the project and take it over the finish line:
+All project milestones across Bronze, Silver, Gold, and CI/CD are completed:
 
 - [x] **1. Implement Gold Layer Marts in [`src/gold/`](src/gold/):**
   - Station flow, user behavior and weather marts, orchestrated by `src/gold/build_gold.py`.
 - [x] **2. Connect Gold Execution to [`run_pipeline.py`](run_pipeline.py):**
-  - `run_gold_transformation(spark, env, run_id)` runs after Silver.
+  - `run_gold_transformation(spark, env, run_id)` runs after Silver and prints summary tables.
 - [x] **3. Write Pytest Suite for Gold:**
-  - Create `tests/test_gold.py`.
-  - Validate that `silver_cleaned` transforms into the correct KPI metrics without nulls or division-by-zero.
+  - Created `tests/test_gold.py`.
+  - Validated that `silver_cleaned` transforms into the correct KPI metrics without nulls or division-by-zero.
 - [x] **4. Verify CI/CD on `dev`:**
-  - Push changes to `dev` and ensure the GitHub Actions runner (`spark-group03`) executes all tests cleanly.
-- [ ] **5. Create Release Pull Request:**
-  - Open a PR from `dev` to `main`.
-  - Review the diff, approve deployment in the `prod` environment gate, and confirm the production run.
+  - Pushed changes to `dev` and ensured the GitHub Actions runner (`spark-group03`) executes all 11 tests cleanly.
+- [x] **5. Create Release Pull Request:**
+  - Opened and merged PR #2 from `dev` to `main`.
 
 ---
 
