@@ -86,6 +86,8 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
 
     # Read raw datasets preserving source payload fidelity
     raw_trips_df = spark.read.option("header", "true").csv(trips_raw_dir)
+    if "bike_id" not in raw_trips_df.columns:
+        raw_trips_df = raw_trips_df.withColumn("bike_id", F.lit(None).cast("string"))
     raw_stations_df = spark.read.option("multiLine", "true").json(stations_raw_dir)
     raw_weather_df = spark.read.option("header", "true").csv(weather_raw_dir)
 

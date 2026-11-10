@@ -2,10 +2,12 @@
 """DAT535 Medallion Architecture Pipeline Orchestrator.
 
 Executes the end-to-end CityBikes Medallion pipeline (Bronze Ingestion,
-Silver Core Cleaning & Quarantine, and Gold Marts).
+Silver Core Cleaning & Quarantine, Silver Enrichment, and Gold Marts).
 
 Usage:
     python run_pipeline.py --env dev
+    python run_pipeline.py --env dev --source real --scope jc
+    python run_pipeline.py --env dev --source real --scope nyc
     python run_pipeline.py --env test
     python run_pipeline.py --env prod
     python run_pipeline.py --help
@@ -39,13 +41,20 @@ logging.basicConfig(
 logger = logging.getLogger("DAT535_Orchestrator")
 
 
-def run_medallion(env: str = "dev") -> Dict[str, Any]:
-    """Execute the core Medallion pipeline: Raw Generation, Bronze Ingestion, Silver Cleaning, and Gold Marts."""
+def run_medallion(
+    env: str = "dev",
+    source: str = "synthetic",
+    scope: str = "jc",
+    month: str = "202409",
+) -> Dict[str, Any]:
+    """Execute the core Medallion pipeline: Raw Generation/Download, Bronze Ingestion, Silver Cleaning, and Gold Marts."""
     from config.settings import get_env_paths
     from src.bronze.ingest_bronze import run_bronze_ingestion
     from src.gold.build_gold import run_gold_transformation
     from src.silver.clean_quarantine import run_silver_cleaning
+    from src.silver.enrich_conform import run_silver_enrichment
     from src.utils.data_generator import generate_raw_batches
+    from src.utils.real_data_downloader import download_all_real_data
     from src.utils.spark_session import get_spark_session
 
     start_time = time.time()
@@ -53,16 +62,35 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
     paths = get_env_paths(env)
 
     logger.info("=" * 70)
-    logger.info(f"STARTING MEDALLION PIPELINE [ENV: {env.upper()}] [RUN_ID: {run_id}]")
+    logger.info(
+        f"STARTING MEDALLION PIPELINE [ENV: {env.upper()}] [SOURCE: {source.upper()}] [RUN_ID: {run_id}]"
+    )
     logger.info("=" * 70)
 
-    # 1. Raw Batch Bootstrap
-    logger.info("Step 1: Checking raw data landing directory...")
-    gen_info = generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
-    logger.info(
-        f"Raw data ready: {gen_info['total_trip_rows']} trips, "
-        f"{gen_info['stations_count']} stations, {gen_info['weather_rows']} weather records."
-    )
+    # 1. Raw Batch Bootstrap (Synthetic or Real)
+    if source.lower() == "real":
+        logger.info(
+            f"Step 1: Downloading real Citi Bike ({scope.upper()}) & NOAA weather data for {month}..."
+        )
+        gen_info = download_all_real_data(raw_dir=paths["raw_dir"], scope=scope, month=month)
+        logger.info(
+            f"Real data ready: {gen_info['trips_count']} trips, "
+            f"{gen_info['stations_count']} stations, {gen_info['weather_count']} weather records."
+        )
+    else:
+        logger.info("Step 1: Checking raw data landing directory (synthetic generator)...")
+        for sub in ("trips", "stations", "weather"):
+            sub_dir = os.path.join(paths["raw_dir"], sub)
+            if os.path.exists(sub_dir):
+                for fname in os.listdir(sub_dir):
+                    fpath = os.path.join(sub_dir, fname)
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
+        gen_info = generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
+        logger.info(
+            f"Raw data ready: {gen_info['total_trip_rows']} trips, "
+            f"{gen_info['stations_count']} stations, {gen_info['weather_rows']} weather records."
+        )
 
     # 2. Spark Session Initialization
     spark = get_spark_session(f"DAT535_Medallion_{env.capitalize()}")
@@ -88,7 +116,6 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
 
     # 4b. Silver Conformance & Station Enrichment
     logger.info("Step 3b: Executing Silver Conformance & Station Enrichment...")
-    from src.silver.enrich_conform import run_silver_enrichment
     silver_enrichment_metrics = run_silver_enrichment(spark, env=env, run_id=run_id)
     logger.info(
         f"Silver Enrichment Complete: {silver_enrichment_metrics['enriched_rows']} trips conformed at {paths['silver_enriched']}."
@@ -190,6 +217,23 @@ def main() -> int:
         choices=["dev", "test", "prod"],
         help="Target environment (default: dev)",
     )
+    parser.add_argument(
+        "--source",
+        default="synthetic",
+        choices=["synthetic", "real"],
+        help="Data source mode: synthetic generator or real Citi Bike & NOAA data (default: synthetic)",
+    )
+    parser.add_argument(
+        "--scope",
+        default="jc",
+        choices=["jc", "nyc"],
+        help="Scope for real Citi Bike data: jc (Jersey City ~100k trips) or nyc (NYC ~3.5M trips) (default: jc)",
+    )
+    parser.add_argument(
+        "--month",
+        default="202409",
+        help="Year and month for real data in YYYYMM format (default: 202409)",
+    )
 
     args = parser.parse_args()
 
@@ -205,7 +249,12 @@ def main() -> int:
             return 0 if all(r.get("status") == "success" for r in res.values()) else 1
         else:
             # Default: run the core Medallion pipeline
-            res = run_medallion(env=args.env)
+            res = run_medallion(
+                env=args.env,
+                source=args.source,
+                scope=args.scope,
+                month=args.month,
+            )
             return 0 if res.get("status") == "success" else 1
     except Exception as exc:
         logger.error(f"Pipeline execution failed: {exc}", exc_info=True)

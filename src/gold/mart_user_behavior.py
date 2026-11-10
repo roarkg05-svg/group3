@@ -37,8 +37,13 @@ def build_top_corridors(trips_df: DataFrame, stations_df: DataFrame) -> DataFram
         F.col("station_name").alias("end_station_name"),
     )
 
+    trips_base = trips_df
+    for col_name in ("start_station_name", "end_station_name"):
+        if col_name in trips_base.columns:
+            trips_base = trips_base.drop(col_name)
+
     corridors = (
-        trips_df.filter(
+        trips_base.filter(
             F.col("start_station_id").isNotNull() & F.col("end_station_id").isNotNull()
         )
         .join(F.broadcast(start_names), on="start_station_id", how="left")

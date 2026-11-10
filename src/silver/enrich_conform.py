@@ -51,15 +51,28 @@ def run_silver_enrichment(
         F.col("capacity").alias("end_capacity"),
     )
 
+    # Prepare cleaned trips, dropping any existing station metadata columns to avoid ambiguous references
+    trips_base_df = trips_df
+    for col_to_drop in [
+        "start_station_name",
+        "end_station_name",
+        "start_region_id",
+        "end_region_id",
+        "start_capacity",
+        "end_capacity",
+    ]:
+        if col_to_drop in trips_base_df.columns:
+            trips_base_df = trips_base_df.drop(col_to_drop)
+
     enriched_df = (
-        trips_df.join(
+        trips_base_df.join(
             F.broadcast(start_dim),
-            trips_df["start_station_id"] == start_dim["_start_dim_id"],
+            trips_base_df["start_station_id"] == start_dim["_start_dim_id"],
             how="left",
         )
         .join(
             F.broadcast(end_dim),
-            trips_df["end_station_id"] == end_dim["_end_dim_id"],
+            trips_base_df["end_station_id"] == end_dim["_end_dim_id"],
             how="left",
         )
         .drop("_start_dim_id", "_end_dim_id")

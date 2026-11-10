@@ -30,11 +30,7 @@ def _trim_or_null(col_name: str) -> F.Column:
 
 def _normalize_coord(col_name: str) -> F.Column:
     """Trim coordinate string, normalize empty strings / whitespace / 0.0 to null, cast to double."""
-    raw_str = F.trim(F.col(col_name).cast(StringType()))
-    empty_or_null = raw_str.isNull() | (raw_str == "")
-    casted = F.when(empty_or_null, F.lit(None).cast(DoubleType())).otherwise(
-        raw_str.cast(DoubleType())
-    )
+    casted = F.expr(f"try_cast(trim({col_name}) AS double)")
     return F.when((casted.isNull()) | (casted == 0.0), F.lit(None).cast(DoubleType())).otherwise(
         casted
     )
@@ -176,6 +172,7 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
         | F.col("started_at").isNull()
         | F.col("ended_at").isNull()
         | F.col("start_station_id").isNull()
+        | F.col("end_station_id").isNull()
     )
 
     cond_neg_or_zero_dur = F.col("trip_duration_min").isNotNull() & (
