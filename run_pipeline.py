@@ -157,6 +157,99 @@ def run_medallion(
             f.write(f"- User Behavior Records: `{gold_metrics['user_kpi_rows'] + gold_metrics['top_corridor_rows']}`\n")
             f.write(f"- Weather Ridership Records: `{gold_metrics['weather_ridership_rows']}`\n")
 
+    # 5b. Display Visual Data Tables to Console
+    print("\n" + "=" * 80)
+    print("📊 GOLD ANALYTICAL MARTS & SILVER QUALITY PREVIEW")
+    print("=" * 80)
+
+    try:
+        from pyspark.sql import functions as F
+
+        # Table 1: User Behavior KPIs
+        print("\n🔹 MART 1: USER BEHAVIOR KPIS (Member vs Casual)")
+        user_kpis_path = paths["gold_rebalancing"].replace(
+            "station_rebalancing_mart", "user_behavior_mart/kpis"
+        )
+        if os.path.exists(user_kpis_path):
+            kpis_df = spark.read.parquet(user_kpis_path)
+            kpis_df.select(
+                "member_casual",
+                "rideable_type",
+                "total_trips",
+                F.round("avg_duration_min", 1).alias("avg_dur_min"),
+                F.round("median_duration_min", 1).alias("med_dur_min"),
+                F.round("avg_speed_kmh", 1).alias("speed_kmh"),
+                F.round("avg_distance_km", 2).alias("dist_km"),
+            ).show(truncate=False)
+
+        # Table 2: Top 5 Corridors
+        print("🔹 MART 2: TOP 5 COMMUTER & LEISURE CORRIDORS")
+        corridors_path = paths["gold_rebalancing"].replace(
+            "station_rebalancing_mart", "user_behavior_mart/top_corridors"
+        )
+        if os.path.exists(corridors_path):
+            corr_df = spark.read.parquet(corridors_path)
+            corr_df.filter(F.col("corridor_rank") <= 5).select(
+                "member_casual",
+                "corridor_rank",
+                "start_station_name",
+                "end_station_name",
+                "trips",
+            ).show(truncate=False)
+
+        # Table 3: Weather Ridership Mart
+        print("🔹 MART 3: WEATHER IMPACT ON COMMUTE RIDERSHIP")
+        if os.path.exists(paths["gold_weather_impact"]):
+            weather_df = spark.read.parquet(paths["gold_weather_impact"])
+            weather_df.select(
+                "temperature_bin",
+                "rain_bin",
+                "total_trips",
+                "hours_with_trips",
+                F.round("avg_trips_per_hour", 1).alias("trips_per_hr"),
+                F.round("avg_speed_kmh", 1).alias("speed_kmh"),
+            ).show(truncate=False)
+
+        # Table 4: Station Rebalancing Top 5
+        print("🔹 MART 4: STATION FLOW & REBALANCING (Top 5 Stations by Volume)")
+        if os.path.exists(paths["gold_rebalancing"]):
+            flow_df = spark.read.parquet(paths["gold_rebalancing"])
+            flow_summary = (
+                flow_df.groupBy("station_name", "region_id")
+                .agg(
+                    F.sum("outbound_trips").alias("outbound"),
+                    F.sum("inbound_trips").alias("inbound"),
+                    F.sum("net_flow").alias("net_flow"),
+                    F.round(F.avg("turnover_ratio"), 1).alias("avg_turnover"),
+                )
+                .orderBy(F.col("outbound").desc())
+                .limit(5)
+            )
+            flow_summary.show(truncate=False)
+
+        # Table 5: Silver Quality Evidence Before vs After
+        print("🔹 SILVER QUALITY EVIDENCE (BEFORE VS AFTER CLEANING)")
+        comp = silver_metrics.get("before_and_after_comparison", {})
+        if comp:
+            comp_rows = []
+            for metric_key, vals in comp.items():
+                if "before_bronze" in vals:
+                    comp_rows.append((
+                        metric_key.replace("_", " ").title(),
+                        str(vals["before_bronze"]),
+                        str(vals["after_silver_clean"]),
+                        str(vals["action_taken"]),
+                    ))
+            comp_df = spark.createDataFrame(
+                comp_rows,
+                ["Quality Check", "Bronze (Before)", "Silver (After)", "Action Taken"],
+            )
+            comp_df.show(truncate=False)
+
+        print("=" * 80 + "\n")
+    except Exception as e:
+        logger.warning(f"Could not print visual preview tables: {e}")
+
     print("Medallion pipeline completed successfully.")
     return {
         "status": "success",

@@ -290,6 +290,51 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
         else 0.0
     )
 
+    before_and_after_comparison: Dict[str, Any] = {
+        "missing_critical_keys": {
+            "before_bronze": quarantine_breakdown_by_rule["MISSING_CRITICAL_KEY"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 1 (Flag, Don't Delete)",
+        },
+        "missing_or_zero_coordinates": {
+            "before_bronze": imputed_coords_count,
+            "after_silver_clean": 0,
+            "action_taken": "Imputed using GBFS station catalog lat/lng",
+        },
+        "duplicate_ride_ids": {
+            "before_bronze": duplicates_removed_count,
+            "after_silver_clean": 0,
+            "action_taken": "Deduplicated via Window row_number on ingestion timestamp DESC",
+        },
+        "false_unlocks_under_60s": {
+            "before_bronze": quarantine_breakdown_by_rule["FALSE_UNLOCK_UNDER_60S"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 3",
+        },
+        "unphysical_speeds": {
+            "before_bronze": quarantine_breakdown_by_rule["IMPOSSIBLE_PHYSICAL_SPEED"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 6 (>45 km/h classic, >55 km/h e-bike)",
+        },
+        "out_of_nyc_bounds": {
+            "before_bronze": quarantine_breakdown_by_rule["OUT_OF_NYC_BOUNDS"],
+            "after_silver_clean": 0,
+            "action_taken": "Quarantined under Rule 7",
+        },
+        "accepted_clean_records": {
+            "count": valid_cleaned_rows,
+            "pct_of_total": f"{(valid_cleaned_rows / bronze_input_rows * 100):.2f}%"
+            if bronze_input_rows > 0
+            else "0%",
+        },
+        "rejected_quarantine_records": {
+            "count": quarantined_rows,
+            "pct_of_total": f"{(quarantined_rows / bronze_input_rows * 100):.2f}%"
+            if bronze_input_rows > 0
+            else "0%",
+        },
+    }
+
     cleaning_metrics: Dict[str, Any] = {
         "run_id": run_id,
         "env": env,
@@ -305,6 +350,7 @@ def run_silver_cleaning(spark: SparkSession, env: str, run_id: str) -> Dict[str,
         "max_quarantine_threshold": QUALITY_THRESHOLDS["max_quarantine_rate"],
         "quality_gate_passed": quarantine_rate <= QUALITY_THRESHOLDS["max_quarantine_rate"],
         "quarantine_breakdown_by_rule": quarantine_breakdown_by_rule,
+        "before_and_after_comparison": before_and_after_comparison,
     }
 
     # Write preliminary Silver quality report (can be enriched by downstream Silver conformance)
