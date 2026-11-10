@@ -1,204 +1,335 @@
-# DAT535
+# DAT535 Data Engineering — Medallion Architecture Pipeline
 
-## Spark Lab Pipelines
+[![DAT535 Dev Medallion CI](https://github.com/roarkg05-svg/group3/actions/workflows/dat535-dev.yml/badge.svg?branch=dev)](https://github.com/roarkg05-svg/group3/actions/workflows/dat535-dev.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![PySpark 4.2.0](https://img.shields.io/badge/PySpark-4.2.0-orange.svg)](https://spark.apache.org/)
+[![Java 17](https://img.shields.io/badge/Java-17%20OpenJDK-red.svg)](https://openjdk.org/projects/jdk/17/)
 
-Spark pipelines for learning distributed data processing.
+> **Course:** DAT535 Data Engineering — University of Stavanger (UiS)  
+> **Project:** Scalable Medallion Architecture Pipeline (CityBikes & NOAA Weather Mobility Domain)  
+> **Team (Group 3):** Ramon Garcia Arrasa & Oriol Garcia Torcal  
+> **Branch Strategy:** Active development on `dev` → Pull Request with validation gates → Merge into `main` for production release.
 
-### Repo Structure
+---
 
-```text
-.
-├── README.md                    # This file
-├── project_cicd_guide.md        # Dev/Prod CI/CD hands-on guide (GitHub Environments, branch strategy, exercise)
-├── run_pipeline.py              # Pipeline orchestrator (lab2 -> lab3)
-├── lab2_pipeline.py             # Lab 2: Fundamentals + MapReduce + Medallion Architecture
-├── lab3_pipeline.py             # Lab 3: Window functions, joins, UDFs, streaming, production patterns
-├── lab1_install-spark.sh        # Lab 1: Bash script to install Spark, Java, Python 3.11 & packages
-├── lab2_spark_fundamentals.ipynb# Lab 2 notebook: Fundamentals + MapReduce + Medallion Architecture
-├── lab3_advanced_spark.ipynb    # Lab 3 notebook: Window functions, joins, UDFs, streaming, production patterns
-└── .github/
-    └── workflows/
-        ├── pipeline.yml         # Scheduled & dispatch pipeline workflow
-        ├── dat535-dev.yml       # Dev branch CI pipeline workflow
-        └── dat535-prod.yml      # Main branch production deployment workflow
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Repository Architecture](#repository-architecture)
+3. [Medallion Pipeline Architecture](#medallion-pipeline-architecture)
+   - [Bronze Layer (Raw Ingestion & Lineage)](#bronze-layer-raw-ingestion--lineage)
+   - [Silver Core Layer (Cleaning, Imputation & Quarantine)](#silver-core-layer-cleaning-imputation--quarantine)
+   - [Gold Layer (Business Marts & KPIs)](#gold-layer-business-marts--kpis)
+4. [CRITICAL VM & Runner Notes (MUST-READ FOR ORIOL)](#critical-vm--runner-notes-must-read-for-oriol)
+   - [1. Target VM & Runner Specs](#1-target-vm--runner-specs)
+   - [2. Python Environment Location](#2-python-environment-location)
+   - [3. Java 17 Requirement (Bytecode 61.0 vs 52.0)](#3-java-17-requirement-bytecode-610-vs-520)
+   - [4. The SPARK_HOME Conflict](#4-the-spark_home-conflict)
+5. [Quick Start & Execution Guide](#quick-start--execution-guide)
+   - [Environment Setup](#environment-setup)
+   - [Running the Test Suite](#running-the-test-suite)
+   - [Running the Pipeline Locally or on VM](#running-the-pipeline-locally-or-on-vm)
+6. [Team Handover & Next Steps](#team-handover--next-steps)
+7. [Handover Checklist for Oriol](#handover-checklist-for-oriol)
+8. [Archived Coursework (`labs/`)](#archived-coursework-labs)
+
+---
+
+## Executive Summary
+
+This repository implements a production-grade, distributed **Medallion Architecture (Bronze $\rightarrow$ Silver $\rightarrow$ Gold)** data pipeline using **Apache Spark (PySpark 4.2.0)** on an isolated Ubuntu server runner (`spark-group03`). 
+
+The pipeline ingests heterogeneous high-velocity urban mobility data (NYC Citi Bike ride transactions, real-time GBFS docking station feeds, and NOAA hourly weather observations), enforces strict payload-plus-evidence audit lineage, performs grain deduplication and geographic coordinate imputation, executes an autonomous **7-rule quarantine engine**, and produces analytical aggregates for downstream consumption.
+
+```mermaid
+flowchart LR
+    subgraph Raw["Landing Zone (Raw Batches)"]
+        R1["citibike_*.csv<br/>(Trips)"]
+        R2["gbfs_stations.json<br/>(GBFS Stations)"]
+        R3["noaa_weather.csv<br/>(Hourly Weather)"]
+    end
+
+    subgraph Bronze["Bronze Layer (Load First, Interpret Later)"]
+        B1[("bronze_trips<br/>(Parquet + Lineage)")]
+        B2[("bronze_stations<br/>(Parquet + Lineage)")]
+        B3[("bronze_weather<br/>(Parquet + Lineage)")]
+        BR["bronze_receipt.json<br/>(Delivery Audit)"]
+    end
+
+    subgraph Silver["Silver Core Layer (Method 1 + 2 + 3)"]
+        SC[("silver_cleaned<br/>(Deduplicated & Enriched)")]
+        SQ[("silver_quarantine<br/>(7-Rule Violations)")]
+        SR["silver_quality_report.json"]
+    end
+
+    subgraph Gold["Gold Layer (Analytics Marts - Oriol)"]
+        G1[("gold_rebalancing<br/>(Station Demand Mart)")]
+        G2[("gold_weather_impact<br/>(Weather Elasticity Mart)")]
+        G3[("user_behavior_mart<br/>(Member vs Casual KPIs & Top Corridors)")]
+    end
+
+    Raw -->|Batch Ingest + Metadata Tagging| Bronze
+    Bronze -->|Clean, Impute Coords, Dedup & Quarantine| Silver
+    Silver -->|Aggregate & KPI Analytics| Gold
 ```
 
-### Overview
+---
 
-The Jupyter notebooks in this folder teach Apache Spark end-to-end across **two consolidated labs**
-that share **one single e-commerce clickstream dataset** (generated once in Lab 2, reused by Lab 3):
+## Repository Architecture
 
-| Lab   | Notebook                        | Key Concepts                                                                                                                                                                                                                                                 |
-| ----- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Lab 2 | `lab2_spark_fundamentals.ipynb` | SparkSession & architecture, RDD/DataFrame/SQL/pandas conversions, column ops & type casting, filtering/sorting/aggregations, Parquet/CSV/JSON I/O, MapReduce with RDDs, the Medallion Architecture (Bronze/Silver/Gold)                                     |
-| Lab 3 | `lab3_advanced_spark.ipynb`     | Window functions, partitioning strategies, caching/persistence, every join type + broadcast joins, query optimization, UDFs vs pandas UDFs vs built-ins, Structured Streaming basics, production patterns (incremental processing, data quality, SCD Type 2) |
-
-The `.py` pipeline scripts (`lab2_pipeline.py`, `lab3_pipeline.py`, `run_pipeline.py`) mirror the same
-two-lab structure as the notebooks: `lab2_pipeline.py` generates the shared dataset and builds the
-Medallion pipeline, and `lab3_pipeline.py` loads Lab 2's Silver output and runs the advanced/production
-patterns. Run Lab 2 before Lab 3 (or use `python run_pipeline.py all`).
-
-### Quick Start
-
-1. **Install Prerequisites (Lab 1)**:
-
-    Complete the `lab1_install-spark.sh` script on Ubuntu VM for clearting Spark.
-
-   ```bash
-   chmod +x lab1_install-spark.sh
-   ./lab1_install-spark.sh
-   source ~/spark-env/bin/activate
-   ```
-
-2. Run Pipeline Scripts:
-
-    ```bash
-    # Run individual labs
-    python run_pipeline.py lab2
-    python run_pipeline.py lab3
-
-    # Run all labs (Lab 2 then Lab 3)
-    python run_pipeline.py all
-    ```
-
-### Lab Details
-
-#### Lab 2: Spark Fundamentals & the Medallion Architecture
-
-**Learning Objectives:**
-
-- Create and configure a SparkSession; understand driver/executor/task/partition
-- Convert data between RDD, DataFrame, SQL views and pandas
-- Perform DataFrame operations (select, withColumn, cast, filter, sort)
-- Run aggregations and groupBy operations
-- Read/write data in multiple formats (Parquet, CSV, JSON, partitioned)
-- Apply MapReduce patterns directly with RDDs (map, flatMap, reduceByKey)
-- Build a Bronze -> Silver -> Gold pipeline with data-quality quarantining
-
-**Output (shared with Lab 3):**
+The codebase follows professional data engineering directory standards, isolating production pipeline logic, shared configurations, integration test suites, and archived exploratory coursework:
 
 ```text
-~/spark-lab-data/shared/
-├── bronze/events/
-├── silver/
-│   ├── events/
-│   └── quarantine/
-└── gold/
-    ├── daily_metrics/
-    ├── user_metrics/
-    ├── product_metrics/
-    └── category_metrics/
-
-~/spark-lab-data/lab2/            # scratch I/O examples (parquet/csv/json/partitioned)
+group3/
+├── .github/
+│   └── workflows/
+│       ├── dat535-dev.yml              # CI/CD verification workflow on runner 'spark-group03'
+│       ├── dat535-prod.yml             # Production deployment workflow with approval gates
+│       └── pipeline.yml                # Scheduled/manual pipeline trigger workflow
+├── config/
+│   ├── __init__.py
+│   └── settings.py                     # Environment path resolution, NYC bounds & quality thresholds
+├── src/
+│   ├── __init__.py
+│   ├── bronze/
+│   │   ├── __init__.py
+│   │   └── ingest_bronze.py            # Raw batch ingestion, metadata tagging & delivery receipts
+│   ├── silver/
+│   │   ├── __init__.py
+│   │   └── clean_quarantine.py         # Dedup, coordinate imputation & 7-rule quarantine engine
+│   ├── gold/
+│   │   ├── __init__.py
+│   │   ├── mart_station_flow.py        # Daily station balance, turnover & peak hour
+│   │   ├── mart_user_behavior.py       # Member vs casual KPIs & top corridors
+│   │   ├── mart_weather_ridership.py   # Trip volume, distance & speed per weather bin
+│   │   └── build_gold.py               # Gold orchestrator, Silver reconciliation & ready signal
+│   └── utils/
+│       ├── __init__.py
+│       ├── spark_session.py            # Optimized SparkSession builder with dynamic shuffle
+│       └── data_generator.py           # Multi-batch synthetic data generator with controlled anomalies
+├── tests/
+│   ├── __init__.py
+│   ├── test_bronze_silver_core.py      # Pytest integration and validation test suite
+│   └── test_gold.py                    # Gold mart, reconciliation & ready-signal tests
+├── labs/                               # Archived coursework, installation scripts & notebooks
+│   ├── lab1_1_setup_guide.md           # Lab 1 setup instructions
+│   ├── lab1_install-spark.sh           # Spark installation script for Ubuntu VMs
+│   ├── lab2_pipeline.py                # Lab 2 e-commerce pipeline
+│   ├── lab2_spark_fundamentals.ipynb   # Lab 2 fundamentals notebook
+│   ├── lab3_pipeline.py                # Lab 3 advanced Spark pipeline
+│   ├── lab3_advanced_spark.ipynb       # Lab 3 windowing and streaming notebook
+│   └── project_cicd_guide.md           # Original course CI/CD walkthrough guide
+├── run_pipeline.py                     # Master CLI entrypoint for local and CI execution
+├── requirements.txt                    # Production and testing Python dependencies
+└── README.md                           # Master project documentation & handover guide
 ```
 
-#### Lab 3: Advanced Spark & Production Patterns
+---
 
-**Learning Objectives:**
+## Medallion Pipeline Architecture
 
-- Master window functions (ranking, lag/lead, running totals, moving averages)
-- Understand partitioning strategies and partition pruning
-- Implement caching/persistence and compare storage levels
-- Perform every join type (inner/left/right/full/semi/anti) and optimize with broadcast joins
-- Apply query optimization techniques (filter/column pushdown, execution plans)
-- Compare UDFs, pandas UDFs and built-in functions
-- Build a minimal Structured Streaming pipeline with a windowed aggregation
-- Learn production patterns: incremental processing, data quality checks, SCD Type 2, safe aggregation
+### Bronze Layer (Raw Ingestion & Lineage)
 
-**Input:** loads the Silver-layer dataset produced by Lab 2 from `~/spark-lab-data/shared/silver/events`
-(run Lab 2 first).
+- **Implementation:** [`src/bronze/ingest_bronze.py`](src/bronze/ingest_bronze.py)
+- **Design Philosophy:** *"Load First, Interpret Later"* & *"Payload Plus Evidence"*.
+- **Data Ingestion:**
+  - Raw CSV and multi-line JSON files are ingested with minimal transformation to preserve source fidelity.
+  - Ingestion does not discard malformed records at this stage; instead, audit metadata columns are appended:
+    - `_source_file`: Extracted via `input_file_name()`.
+    - `_dataset_type`: `trips`, `stations`, or `weather`.
+    - `_ingestion_timestamp`: UTC timestamp of the ingestion job.
+    - `_run_id`: Unique execution identifier (e.g., `ci_dev_20261109_183000`).
+    - `_schema_version`: Data contract version tag (`v1.0`).
+- **Delivery Receipt (`bronze_receipt.json`):**
+  - Validates expected file arrival against actual disk counts.
+  - Records row counts per dataset and emits schema validation status (`PASSED` / `FAILED`).
 
-**Output:**
+---
 
-```text
-~/spark-lab-data/lab3/
-└── partitioned_data/
-    ├── no_partition/
-    ├── date_partition/
-    └── multi_partition/
-```
+### Silver Core Layer (Cleaning, Imputation & Quarantine)
 
-## GitHub Actions CI/CD Guide
+- **Implementation:** [`src/silver/clean_quarantine.py`](src/silver/clean_quarantine.py)
+- **Method 1 (Shape & Physics):**
+  - Normalizes empty strings `""`, whitespace, and `"0.0"` coordinates into strict `NULL` values before coalescing.
+  - Imputes missing destination coordinates (`end_lat`, `end_lng`) by looking up the station coordinates in the GBFS catalog using `end_station_id`.
+  - Calculates great-circle Haversine distance ($d_{\text{km}}$) and velocity ($v_{\text{km/h}}$):
+    $$d = 2 R \arcsin \left(\sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\Delta \lambda}{2}\right)}\right)$$
+- **Method 2 (Identity & Deduplication):**
+  - Deduplicates on the primary transaction grain `ride_id` using a window partitioned by `ride_id` and ordered by `_ingestion_timestamp DESC, _source_file DESC`.
+  - Rows with `NULL` `ride_id` are preserved with synthetic surrogate keys so they are routed to quarantine rather than collapsed.
+- **Method 3 (Trust & 7-Rule Quarantine Engine):**
+  - Adopts the *"Flag, Don't Delete"* paradigm. Anomalous rows are routed to `silver_quarantine` with descriptive `dq_issue` and `_rejection_reason` tags:
 
-The repo contains the automated workflows for the DAT535 project. These workflows use GitHub Actions to schedule data pipelines, execute Spark jobs, and deploy code updates.
+| Rule Name | Condition / Threshold | Explanation |
+|---|---|---|
+| `MISSING_CRITICAL_KEY` | `ride_id IS NULL \| started_at IS NULL \| ended_at IS NULL \| start_station_id IS NULL` | Missing required foreign keys or timestamps |
+| `NEGATIVE_OR_ZERO_DURATION` | `trip_duration_min <= 0.0` | Inverted or zero timestamps |
+| `FALSE_UNLOCK_UNDER_60S` | `0.0 < trip_duration_min < 1.0` | False unlock / immediate cancellation |
+| `LOST_OR_STOLEN_OVER_24H` | `trip_duration_min > 1440.0` | Unreturned or abandoned bike |
+| `CIRCULAR_ABANDONED_TRIP` | `start_id == end_id AND duration < 3.0m AND distance < 0.05km` | Unused unlock returned to same dock |
+| `IMPOSSIBLE_PHYSICAL_SPEED` | Classic $> 45.0\text{ km/h}$ or Electric $> 55.0\text{ km/h}$ | GPS telematics glitch or vehicle transport |
+| `OUT_OF_NYC_BOUNDS` | Lat outside $[40.45, 40.95]$ or Lng outside $[-74.30, -73.65]$ | Coordinate corruption outside NYC region |
 
-**Important**: These pipelines are designed to execute on **self-hosted runners** configured with Apache Spark and Java.
+- **Outputs:**
+  - `silver_cleaned`: Pristine dataset ready for analytical aggregation.
+  - `silver_quarantine`: Quarantined anomaly records with multi-rule diagnostics.
+  - `silver_quality_report.json`: Metrics tracking deduplication, coordinate imputation, and quarantine rates against quality gates.
 
-**For the full dev/prod concepts, GitHub Environments setup, and hands-on exercise, see [project_cicd_guide.md](project_cicd_guide.md).**
+---
 
-### Available Workflows
+### Gold Layer (Business Marts & KPIs)
 
-We have configured the following automated processes:
+- **Target Directory:** [`src/gold/`](src/gold/)
+- **Assigned Developer:** Oriol Garcia Torcal
+- **Marts:**
+  1. `station_rebalancing_mart`: One row per station and day with inbound and outbound trips, net flow, turnover ratio and peak departure hour. Stations missing from the catalog are kept and flagged.
+  2. `user_behavior_mart/kpis`: Duration, speed and distance per rider tier and bike type.
+  3. `user_behavior_mart/top_corridors`: The 10 most travelled station pairs per rider tier.
+  4. `weather_commute_impact`: Trip volume, distance and speed per temperature and rain bin.
+- **Publication gate:** `_READY_SIGNAL.json` reports `SUCCESS` only when the marts reconcile with `silver_cleaned`. Otherwise it reports `FAILED` and the pipeline stops.
 
-#### Pipeline ([pipeline.yml](.github/workflows/pipeline.yml))
+---
 
-- **Triggers**:
-  - Scheduled cron job (monthly, 1st of the month at 00:00 UTC: `0 0 1 * *` which can be changed).
-  - Manual dispatch (workflow_dispatch).
-  - Push to `main` is defined in the file but currently commented out.
+## CRITICAL VM & Runner Notes (MUST-READ FOR ORIOL)
 
-- **Key Tasks**:
-  - Checks out the repository code.
-  - Activates the Python environment (`source ~/spark-env/bin/activate`).
-  - Sets environment variables (`SPARK_HOME=/opt/spark`, `JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64`).
-  - Executes all pipelines via `python $GITHUB_WORKSPACE/run_pipeline.py all`.
+> [!CAUTION]
+> **READ BEFORE TOUCHING SPARK OR RUNNING PYTEST ON THE UBUNTU RUNNER!**  
+> Misconfigurations of environment variables on the runner VM will cause PySpark 4.2.0 to fail with obscure Java or bytecode errors.
 
-### Infrastructure & Environment Setup
+### 1. Target VM & Runner Specs
+- **Runner Tag:** `spark-group03` (`self-hosted`)
+- **VM IP Address:** `152.94.163.180`
+- **Host User:** `ubuntu`
 
-These workflows use `runs-on: self-hosted` targeting self-hosted infrastructure equipped with PySpark.
+### 2. Python Environment Location
+- **Active Virtualenv:** `/home/ubuntu/spark-env`
+- **Python Binary:** `/home/ubuntu/spark-env/bin/python` (Python 3.11+)
+- ⚠️ **DO NOT USE MINICONDA:** Do **not** use `/home/ubuntu/miniconda3`. The packages (PySpark 4.2.0, PyArrow, PyTest) are installed inside `/home/ubuntu/spark-env`.
 
-#### Self-Hosted Runner Requirements
+### 3. Java 17 Requirement (Bytecode 61.0 vs 52.0)
+- PySpark 4.2.0 is compiled against **Java 17 (Class File Version 61.0)**.
+- The VM's default `java` alias points to legacy Java 8 (`1.8.0_502`, Class File Version 52.0). Running PySpark under Java 8 will immediately trigger:
+  ```text
+  java.lang.UnsupportedClassVersionError: org/apache/spark/launcher/Main has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only recognizes class file versions up to 52.0
+  ```
+- **The Fix:** Explicitly export Java 17 before running any Python or Spark command:
+  ```bash
+  export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+  export PATH="$JAVA_HOME/bin:$PATH"
+  ```
 
-The runner environment requires the following predefined paths and dependencies:
+### 4. The SPARK_HOME Conflict
+- The VM has a system-wide `/opt/spark` directory containing older Spark 3.x/Java 8 binaries.
+- If the environment variable `SPARK_HOME` is set to `/opt/spark`, PySpark 4.2.0 will attempt to use those incompatible jars instead of its own bundled libraries, producing:
+  ```text
+  TypeError: 'JavaPackage' object is not callable
+  ```
+- **The Fix:** Always unset `SPARK_HOME` so PySpark automatically uses its internal distribution:
+  ```bash
+  unset SPARK_HOME
+  ```
 
-- **Python Virtual Environment**: `~/spark-env/`
-- **Spark Home**: `/opt/spark`
-- **Java Home**: `/usr/lib/jvm/java-8-openjdk-amd64`
+---
 
-**⚠️ Note for Personal Forks:**
-If you fork this repository to your personal GitHub account, you will need to set up a self-hosted runner with Spark and Java installed.
+## Quick Start & Execution Guide
 
-### Setting up a Self-Hosted Runner
+### Environment Setup
 
-To execute these pipelines on your own infrastructure (e.g., your VM), follow these steps:
-
-#### Step 1: Register and Start Runner
-
-1. Go to your repository on GitHub.
-2. Navigate to **Settings** > **Actions** > **Runners** > **New self-hosted runner**.
-3. Select the operating system (linux) and architecture matching (x64) your runner host.
-4. Execute the configuration commands provided by GitHub on the VM:
+When logging into the VM (`ssh ubuntu@152.94.163.180`), always source the environment properly:
 
 ```bash
-# Create a folder
-mkdir actions-runner && cd actions-runner
+# 1. Activate the dedicated virtual environment
+source /home/ubuntu/spark-env/bin/activate
 
-# Download the runner package (Get the specific link for your OS from GitHub UI > Settings > Actions > Runners)
-curl -o actions-runner-osx-x64-2.337.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-osx-x64-2.337.0.tar.gz
+# 2. Prevent old Spark jar hijacking
+unset SPARK_HOME
 
-# Extract
-tar xzf ./actions-runner-osx-x64-2.337.0.tar.gz
+# 3. Lock Java 17 for PySpark 4.2.0
+export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
 
-# Configure (You will need the token from the GitHub UI)
-./config.sh --url https://github.com/OWNER/REPO --token YOUR_TOKEN
+# 4. Set Python path to repository root
+export PYTHONPATH="$(pwd)"
 
-# Start the runner
-# To keep the runner alive after closing the terminal, install as a service:
-sudo ./svc.sh install 
-sudo ./svc.sh start
+# Verify setup
+python --version   # Python 3.11+
+java -version     # OpenJDK 17.0.x
 ```
 
-#### Step 2: Triggering Manually
+### Running the Test Suite
 
-You can test a pipeline without waiting for the schedule:
+Execute the full suite of unit and end-to-end integration tests:
 
-1. Go to the **Actions** tab.
-2. Select a workflow (e.g., "Pipeline") from the left sidebar.
-3. Click the **Run workflow** dropdown button on the right.
-4. Click **Run workflow**.
+```bash
+python -m pytest tests/test_bronze_silver_core.py -v
+```
 
-### CI/CD Troubleshooting
+Expected output:
+```text
+tests/test_bronze_silver_core.py::test_config_paths_and_thresholds PASSED
+tests/test_bronze_silver_core.py::test_generate_raw_batches_deterministic PASSED
+tests/test_bronze_silver_core.py::test_bronze_ingestion_and_silver_cleaning_end_to_end PASSED
+```
 
-- **Virtual Environment Not Found**: Ensure `~/spark-env/bin/activate` exists on the self-hosted runner.
-- **Java / Spark Path Mismatch**: Verify `JAVA_HOME` and `SPARK_HOME` paths on your runner match the environment settings.
-- **Permission Denied**: If `run_pipeline.py` fails to run, make it executable via `git update-index --chmod=+x run_pipeline.py`.
+### Running the Pipeline Locally or on VM
+
+Execute the master orchestrator to run Raw Generation, Bronze Ingestion, and Silver Cleaning:
+
+```bash
+# Dev environment (/tmp/spark-lab-data/dev/)
+python run_pipeline.py --env dev
+
+# Test environment (/tmp/spark-lab-data/test/)
+python run_pipeline.py --env test
+
+# Prod environment (/tmp/spark-lab-data/prod/)
+python run_pipeline.py --env prod
+```
+
+---
+
+## Team Handover & Next Steps
+
+For an exhaustive, production-grade technical specification detailing how Oriol should build the remaining 50% of the project (Gold Layer marts, KPI analytics, end-to-end pipeline wiring, and the Pytest suite), refer directly to the master handover manual:
+
+👉 **[`HANDOVER_ORIOL.md`](HANDOVER_ORIOL.md)**
+
+It provides comprehensive specifications including:
+- **Silver Output Contract:** Data schemas, nullability rules, coordinate imputation flags, and Parquet storage locations.
+- **Gold Mart Specifications:** Architectures and transformations for `mart_station_flow.py`, `mart_user_behavior.py`, `mart_weather_ridership.py`, and `build_gold.py`.
+- **Pipeline Integration:** Instructions to wire the Gold runner into `run_pipeline.py` with GitHub step summary metrics.
+- **Test Suite (`tests/test_gold.py`):** Unit and integration test specifications validating net flow conservation, join integrity, and non-null constraints.
+- **VM Environment Guardrails:** Commands to prevent runtime JVM/PySpark version conflicts on `spark-group03`.
+
+---
+
+## Handover Checklist for Oriol
+
+Oriol, here is the task checklist to complete the project and take it over the finish line:
+
+- [x] **1. Implement Gold Layer Marts in [`src/gold/`](src/gold/):**
+  - Station flow, user behavior and weather marts, orchestrated by `src/gold/build_gold.py`.
+- [x] **2. Connect Gold Execution to [`run_pipeline.py`](run_pipeline.py):**
+  - `run_gold_transformation(spark, env, run_id)` runs after Silver.
+- [x] **3. Write Pytest Suite for Gold:**
+  - Create `tests/test_gold.py`.
+  - Validate that `silver_cleaned` transforms into the correct KPI metrics without nulls or division-by-zero.
+- [x] **4. Verify CI/CD on `dev`:**
+  - Push changes to `dev` and ensure the GitHub Actions runner (`spark-group03`) executes all tests cleanly.
+- [ ] **5. Create Release Pull Request:**
+  - Open a PR from `dev` to `main`.
+  - Review the diff, approve deployment in the `prod` environment gate, and confirm the production run.
+
+---
+
+## Archived Coursework (`labs/`)
+
+All introductory coursework, early setup guides, and exploratory lab notebooks from the first half of the semester have been organized into the [`labs/`](labs/) directory to keep the project root clean:
+
+- [`labs/lab1_1_setup_guide.md`](labs/lab1_1_setup_guide.md): Early VM and environment setup notes.
+- [`labs/lab1_install-spark.sh`](labs/lab1_install-spark.sh): Bash automation for early cluster provisioning.
+- [`labs/lab2_pipeline.py`](labs/lab2_pipeline.py) & [`labs/lab2_spark_fundamentals.ipynb`](labs/lab2_spark_fundamentals.ipynb): Lab 2 e-commerce clickstream fundamentals.
+- [`labs/lab3_pipeline.py`](labs/lab3_pipeline.py) & [`labs/lab3_advanced_spark.ipynb`](labs/lab3_advanced_spark.ipynb): Lab 3 windowing, broadcast joins, and streaming patterns.
+- [`labs/project_cicd_guide.md`](labs/project_cicd_guide.md): Reference guide for Dev/Prod GitHub Actions environments.
+
+These files can still be referenced or executed through `run_pipeline.py` (e.g., `python run_pipeline.py lab2` or `python run_pipeline.py all`).

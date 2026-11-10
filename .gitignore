@@ -1,0 +1,43 @@
+# Local automation scripts
+scripts/
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Spark & Java local artifacts
+metastore_db/
+spark-warehouse/
+derby.log
+*.crc
+.sparkStaging/
+
+# Local data & temporary output directories
+/data/
+/raw_landing/
+/bronze/
+/silver/
+/gold/
+/tmp/
+/.tmp/
+/spark-lab-data/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
