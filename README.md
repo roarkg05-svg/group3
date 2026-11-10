@@ -16,8 +16,8 @@
 
 | Name | UiS ID / Email | GitHub Handle | Primary Responsibilities |
 | :--- | :--- | :--- | :--- |
-| **Ramon Garcia Arrasa** | `ragar6064` (`ragar6064@uis.no`) | `@roarkg05-svg` | Project Architecture, Deterministic Data Generator, Bronze Layer Ingestion & Lineage, Silver Layer (Deduplication, Coordinate Imputation, 7-Rule Quarantine Engine, Station & Calendar Conformance), Dev CI/CD & VM Runner Setup |
-| **Oriol Garcia Torcal** | `origar10` (`ogtorcal@gmail.com`) | `@origar10` | Gold Layer Analytical Marts (Station Flow, User Behavior, Weather Ridership), Silver-to-Gold Reconciliation & `_READY_SIGNAL.json`, Gold Test Suite & Production Workflows (`dat535-prod.yml`) |
+| **Ramon Garcia Arrasa** | `309024` (`ragar6064@uis.no`) | `@roarkg05-svg` | Project Architecture, Deterministic Data Generator, Bronze Layer Ingestion & Lineage, Silver Layer (Deduplication, Coordinate Imputation, 7-Rule Quarantine Engine, Station & Calendar Conformance), Dev CI/CD & VM Runner Setup |
+| **Oriol Garcia Torcal** | `309023` (`ogtorcal@gmail.com`) | `@origar10` | Gold Layer Analytical Marts (Station Flow, User Behavior, Weather Ridership), Silver-to-Gold Reconciliation & `_READY_SIGNAL.json`, Gold Test Suite & Production Workflows (`dat535-prod.yml`) |
 
 ---
 
