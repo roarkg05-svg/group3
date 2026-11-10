@@ -27,6 +27,7 @@ derby.log
 .sparkStaging/
 
 # Local data & temporary output directories
+data/
 /data/
 /raw_landing/
 /bronze/

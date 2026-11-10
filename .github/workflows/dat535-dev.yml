@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify-dev-pipeline:
-    name: Verify Bronze & Silver Core (Dev)
+    name: Verify Medallion Pipeline (Dev)
     runs-on: self-hosted
     env:
       DAT535_ENV: dev
@@ -36,51 +36,10 @@ jobs:
           export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
           python -m pytest tests/ -v
 
-      - name: Execute Dev Pipeline or Bronze/Silver Core Verification
+      - name: Execute Dev Medallion Pipeline
         run: |
           unset SPARK_HOME
           export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
           export PATH="$JAVA_HOME/bin:/home/ubuntu/spark-env/bin:$PATH"
-          if [ -f "run_pipeline.py" ]; then
-            echo "Running full Medallion pipeline via run_pipeline.py..."
-            python run_pipeline.py --env dev
-          else
-            echo "Running Bronze + Silver Core verification entrypoint..."
-            python - <<'EOF'
-          import json
-          import os
-          from datetime import datetime, timezone
-          from config.settings import get_env_paths
-          from src.utils.spark_session import get_spark_session
-          from src.utils.data_generator import generate_raw_batches
-          from src.bronze.ingest_bronze import run_bronze_ingestion
-          from src.silver.clean_quarantine import run_silver_cleaning
-
-          env = os.getenv("DAT535_ENV", "dev")
-          run_id = f"ci_dev_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-          paths = get_env_paths(env)
-
-          gen_info = generate_raw_batches(paths["raw_dir"], num_trips=35000, seed=42)
-          spark = get_spark_session("DAT535_CI_Dev_Verification")
-          bronze_receipt = run_bronze_ingestion(spark, env=env, run_id=run_id)
-          silver_metrics = run_silver_cleaning(spark, env=env, run_id=run_id)
-
-          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary_path:
-              with open(summary_path, "a", encoding="utf-8") as f:
-                  f.write("## DAT535 Dev CI - Bronze & Silver Core Summary\n\n")
-                  f.write(f"- **Run ID:** `{run_id}`\n")
-                  f.write(f"- **Environment:** `{env}`\n")
-                  f.write(f"- **Bronze Schema Validation:** `{bronze_receipt['schema_validation_status']}`\n")
-                  f.write(f"- **Bronze Trips Ingested:** `{bronze_receipt['row_counts']['trips']}`\n")
-                  f.write(f"- **Silver Duplicates Removed:** `{silver_metrics['duplicates_removed']}`\n")
-                  f.write(f"- **Silver Imputed Coordinates:** `{silver_metrics['imputed_coords_count']}`\n")
-                  f.write(f"- **Silver Valid Cleaned Rows:** `{silver_metrics['valid_cleaned_rows']}`\n")
-                  f.write(f"- **Silver Quarantined Rows:** `{silver_metrics['quarantined_rows']}` ({silver_metrics['quarantine_rate']*100:.2f}%)\n\n")
-                  f.write("### Quarantine Breakdown by Rule\n\n")
-                  f.write("| Rule | Quarantined Rows |\n|---|---:|\n")
-                  for rule, count in silver_metrics["quarantine_breakdown_by_rule"].items():
-                      f.write(f"| `{rule}` | {count} |\n")
-          print("Bronze + Silver Core verification completed successfully.")
-          EOF
-          fi
+          echo "=== Running Dev Medallion Pipeline ==="
+          python run_pipeline.py --env dev
