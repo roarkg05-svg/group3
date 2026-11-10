@@ -86,6 +86,14 @@ def run_medallion(env: str = "dev") -> Dict[str, Any]:
         f"7-rule quarantine split: {silver_metrics['quarantine_breakdown_by_rule']}."
     )
 
+    # 4b. Silver Conformance & Station Enrichment
+    logger.info("Step 3b: Executing Silver Conformance & Station Enrichment...")
+    from src.silver.enrich_conform import run_silver_enrichment
+    silver_enrichment_metrics = run_silver_enrichment(spark, env=env, run_id=run_id)
+    logger.info(
+        f"Silver Enrichment Complete: {silver_enrichment_metrics['enriched_rows']} trips conformed at {paths['silver_enriched']}."
+    )
+
     # 5. Gold Layer Marts
     logger.info("Step 4: Executing Gold Layer Marts...")
     gold_metrics = run_gold_transformation(spark, env, run_id)

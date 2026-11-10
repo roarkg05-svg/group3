@@ -12,6 +12,7 @@ from pyspark.sql import functions as F
 from config.settings import NYC_BOUNDS, QUALITY_THRESHOLDS, get_env_paths
 from src.bronze.ingest_bronze import METADATA_COLUMNS, run_bronze_ingestion
 from src.silver.clean_quarantine import RULE_NAMES, run_silver_cleaning
+from src.silver.enrich_conform import run_silver_enrichment
 from src.utils.data_generator import generate_raw_batches
 from src.utils.spark_session import get_spark_session
 
@@ -174,3 +175,21 @@ def test_bronze_ingestion_and_silver_cleaning_end_to_end(
         F.col("_rejection_reason").contains(",")
     ).count()
     assert multi_rule_count > 0
+
+    # 4. Run Silver enrichment & conformance
+    enrich_metrics = run_silver_enrichment(spark=spark, env="test", run_id=run_id)
+    assert enrich_metrics["enriched_rows"] == metrics["valid_cleaned_rows"]
+    assert os.path.exists(isolated_env["silver_enriched"])
+
+    enriched_df = spark.read.parquet(isolated_env["silver_enriched"])
+    for col in (
+        "start_station_name",
+        "end_station_name",
+        "trip_date",
+        "hour_of_day",
+        "day_of_week",
+        "is_weekend",
+        "is_start_catalog_station",
+    ):
+        assert col in enriched_df.columns
+    assert enriched_df.count() == metrics["valid_cleaned_rows"]
