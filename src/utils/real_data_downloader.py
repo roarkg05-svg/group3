@@ -33,9 +33,35 @@ WMO_WEATHER_MAP = {
 }
 
 
-def download_real_trips(raw_trips_dir: str, scope: str = "jc", month: str = "202409") -> int:
+def download_real_trips(
+    raw_trips_dir: str,
+    scope: str = "jc",
+    month: str = "202409",
+    force_download: bool = False,
+) -> int:
     """Download real Citi Bike trip CSV zip from Amazon S3 and split into raw landing batches."""
     os.makedirs(raw_trips_dir, exist_ok=True)
+    out_file1 = os.path.join(raw_trips_dir, "real_trips_batch_01.csv")
+    out_file2 = os.path.join(raw_trips_dir, "real_trips_batch_02.csv")
+
+    if (
+        not force_download
+        and os.path.exists(out_file1)
+        and os.path.exists(out_file2)
+        and os.path.getsize(out_file1) > 0
+        and os.path.getsize(out_file2) > 0
+    ):
+        with open(out_file1, "r", encoding="utf-8") as f1:
+            rows1 = max(0, sum(1 for _ in f1) - 1)
+        with open(out_file2, "r", encoding="utf-8") as f2:
+            rows2 = max(0, sum(1 for _ in f2) - 1)
+        total_cached = rows1 + rows2
+        logger.info(
+            f"[CACHE HIT] Using cached real Citi Bike trips from {out_file1} and {out_file2} "
+            f"({total_cached} rows). Skipping S3 download."
+        )
+        return total_cached
+
     prefix = "JC-" if scope.lower() == "jc" else ""
     filename = f"{prefix}{month}-citibike-tripdata.csv.zip"
     url = f"https://s3.amazonaws.com/tripdata/{filename}"
@@ -64,9 +90,6 @@ def download_real_trips(raw_trips_dir: str, scope: str = "jc", month: str = "202
     batch1_lines = data_lines[:midpoint]
     batch2_lines = data_lines[midpoint:]
 
-    out_file1 = os.path.join(raw_trips_dir, "real_trips_batch_01.csv")
-    out_file2 = os.path.join(raw_trips_dir, "real_trips_batch_02.csv")
-
     with open(out_file1, "w", encoding="utf-8") as f1:
         f1.write(header + "\n")
         f1.write("\n".join(batch1_lines) + "\n")
@@ -81,9 +104,20 @@ def download_real_trips(raw_trips_dir: str, scope: str = "jc", month: str = "202
     return total_trips
 
 
-def download_real_stations(raw_stations_dir: str) -> int:
+def download_real_stations(raw_stations_dir: str, force_download: bool = False) -> int:
     """Download live GBFS station catalog from Citi Bike and conform schema."""
     os.makedirs(raw_stations_dir, exist_ok=True)
+    out_path = os.path.join(raw_stations_dir, "real_stations.json")
+
+    if not force_download and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        with open(out_path, "r", encoding="utf-8") as f_cached:
+            cached_stations = json.load(f_cached)
+        logger.info(
+            f"[CACHE HIT] Using cached GBFS stations from {out_path} "
+            f"({len(cached_stations)} stations). Skipping GBFS download."
+        )
+        return len(cached_stations)
+
     url = "https://gbfs.citibikenyc.com/gbfs/en/station_information.json"
 
     logger.info(f"Downloading live GBFS stations from: {url} ...")
@@ -130,7 +164,6 @@ def download_real_stations(raw_stations_dir: str) -> int:
                 "is_active": True,
             })
 
-    out_path = os.path.join(raw_stations_dir, "real_stations.json")
     with open(out_path, "w", encoding="utf-8") as f_out:
         json.dump(conformed_stations, f_out, indent=2)
 
@@ -138,9 +171,22 @@ def download_real_stations(raw_stations_dir: str) -> int:
     return len(conformed_stations)
 
 
-def download_real_weather(raw_weather_dir: str, year_month: str = "202409") -> int:
+def download_real_weather(
+    raw_weather_dir: str, year_month: str = "202409", force_download: bool = False
+) -> int:
     """Download historical hourly weather for Central Park NYC from Open-Meteo Archive."""
     os.makedirs(raw_weather_dir, exist_ok=True)
+    out_path = os.path.join(raw_weather_dir, f"real_weather_{year_month}.csv")
+
+    if not force_download and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        with open(out_path, "r", encoding="utf-8") as f_cached:
+            cached_rows = max(0, sum(1 for _ in f_cached) - 1)
+        logger.info(
+            f"[CACHE HIT] Using cached NOAA/Open-Meteo weather from {out_path} "
+            f"({cached_rows} hourly records). Skipping API download."
+        )
+        return cached_rows
+
     year = year_month[:4]
     month = year_month[4:6]
     start_date = f"{year}-{month}-01"
@@ -178,7 +224,6 @@ def download_real_weather(raw_weather_dir: str, year_month: str = "202409") -> i
             "condition": cond,
         })
 
-    out_path = os.path.join(raw_weather_dir, f"real_weather_{year_month}.csv")
     with open(out_path, "w", newline="", encoding="utf-8") as f_out:
         writer = csv.DictWriter(
             f_out,
@@ -191,26 +236,44 @@ def download_real_weather(raw_weather_dir: str, year_month: str = "202409") -> i
     return len(rows)
 
 
-def download_all_real_data(raw_dir: str, scope: str = "jc", month: str = "202409") -> Dict[str, Any]:
-    """Download and set up all real data in target raw_dir."""
+def download_all_real_data(
+    raw_dir: str,
+    scope: str = "jc",
+    month: str = "202409",
+    force_download: bool = False,
+) -> Dict[str, Any]:
+    """Download and set up all real data in target raw_dir with local file cache/idempotency."""
     trips_dir = os.path.join(raw_dir, "trips")
     stations_dir = os.path.join(raw_dir, "stations")
     weather_dir = os.path.join(raw_dir, "weather")
 
-    for d in (trips_dir, stations_dir, weather_dir):
-        os.makedirs(d, exist_ok=True)
-        for f in os.listdir(d):
-            os.remove(os.path.join(d, f))
+    expected_cache_files = {
+        trips_dir: {"real_trips_batch_01.csv", "real_trips_batch_02.csv"},
+        stations_dir: {"real_stations.json"},
+        weather_dir: {f"real_weather_{month}.csv"},
+    }
 
-    n_trips = download_real_trips(trips_dir, scope=scope, month=month)
-    n_stations = download_real_stations(stations_dir)
-    n_weather = download_real_weather(weather_dir, year_month=month)
+    for d, allowed_files in expected_cache_files.items():
+        os.makedirs(d, exist_ok=True)
+        for fname in os.listdir(d):
+            fpath = os.path.join(d, fname)
+            if os.path.isfile(fpath) and (force_download or fname not in allowed_files):
+                os.remove(fpath)
+
+    n_trips = download_real_trips(
+        trips_dir, scope=scope, month=month, force_download=force_download
+    )
+    n_stations = download_real_stations(stations_dir, force_download=force_download)
+    n_weather = download_real_weather(
+        weather_dir, year_month=month, force_download=force_download
+    )
 
     summary = {
         "status": "success",
         "scope": scope,
         "month": month,
         "raw_dir": raw_dir,
+        "force_download": force_download,
         "trips_count": n_trips,
         "stations_count": n_stations,
         "weather_count": n_weather,
@@ -223,6 +286,11 @@ def main() -> int:
     parser.add_argument("--env", default="dev", choices=["dev", "test", "prod"])
     parser.add_argument("--scope", default="jc", choices=["jc", "nyc"], help="jc (~100k trips) or nyc (~3.5M trips)")
     parser.add_argument("--month", default="202409", help="YYYYMM (default 202409)")
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force network download even if cached files already exist locally",
+    )
     args = parser.parse_args()
 
     from config.settings import get_env_paths
@@ -234,7 +302,12 @@ def main() -> int:
     print(f"Target raw directory: {raw_dir}")
     print("=" * 70)
 
-    summary = download_all_real_data(raw_dir=raw_dir, scope=args.scope, month=args.month)
+    summary = download_all_real_data(
+        raw_dir=raw_dir,
+        scope=args.scope,
+        month=args.month,
+        force_download=args.force_download,
+    )
     print("\nSummary:")
     print(json.dumps(summary, indent=2))
     return 0
