@@ -69,6 +69,7 @@ def _append_audit_metadata(
 
 def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str, Any]:
     """Ingest raw landing batches into Bronze Parquet tables and emit a JSON delivery receipt."""
+    spark.conf.set("spark.sql.parquet.mergeSchema", "true")
     paths = get_env_paths(env)
     raw_dir = paths["raw_dir"]
 
@@ -96,26 +97,45 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
     bronze_stations_df = _append_audit_metadata(raw_stations_df, "stations", run_id)
     bronze_weather_df = _append_audit_metadata(raw_weather_df, "weather", run_id)
 
-    # Persist Bronze Parquet tables in overwrite mode
-    bronze_trips_df.write.mode("overwrite").parquet(paths["bronze_trips"])
-    bronze_stations_df.write.mode("overwrite").parquet(paths["bronze_stations"])
-    bronze_weather_df.write.mode("overwrite").parquet(paths["bronze_weather"])
+    # Persist Bronze Parquet tables in append mode (immutable, cumulative history)
+    bronze_trips_df.write.mode("append").parquet(paths["bronze_trips"])
+    bronze_stations_df.write.mode("append").parquet(paths["bronze_stations"])
+    bronze_weather_df.write.mode("append").parquet(paths["bronze_weather"])
 
-    # Compute row counts from persisted Bronze tables
-    trips_count = spark.read.parquet(paths["bronze_trips"]).count()
-    stations_count = spark.read.parquet(paths["bronze_stations"]).count()
-    weather_count = spark.read.parquet(paths["bronze_weather"]).count()
+    # Read persisted Bronze tables and compute both current batch and cumulative row counts
+    persisted_trips_df = spark.read.option("mergeSchema", "true").parquet(paths["bronze_trips"])
+    persisted_stations_df = spark.read.option("mergeSchema", "true").parquet(paths["bronze_stations"])
+    persisted_weather_df = spark.read.option("mergeSchema", "true").parquet(paths["bronze_weather"])
 
-    # Validate expected source + metadata columns
-    trips_schema_ok = EXPECTED_COLUMNS["trips"].issubset(set(bronze_trips_df.columns)) and set(
-        METADATA_COLUMNS
-    ).issubset(set(bronze_trips_df.columns))
-    stations_schema_ok = EXPECTED_COLUMNS["stations"].issubset(
-        set(bronze_stations_df.columns)
-    ) and set(METADATA_COLUMNS).issubset(set(bronze_stations_df.columns))
-    weather_schema_ok = EXPECTED_COLUMNS["weather"].issubset(
-        set(bronze_weather_df.columns)
-    ) and set(METADATA_COLUMNS).issubset(set(bronze_weather_df.columns))
+    batch_trips_count = persisted_trips_df.filter(F.col("_run_id") == run_id).count()
+    batch_stations_count = persisted_stations_df.filter(F.col("_run_id") == run_id).count()
+    batch_weather_count = persisted_weather_df.filter(F.col("_run_id") == run_id).count()
+
+    trips_count = persisted_trips_df.count()
+    stations_count = persisted_stations_df.count()
+    weather_count = persisted_weather_df.count()
+
+    accumulated_runs = persisted_trips_df.select("_run_id").distinct().count()
+
+    # Validate expected source + metadata columns across incoming batch and accumulated Bronze tables
+    trips_schema_ok = (
+        EXPECTED_COLUMNS["trips"].issubset(set(bronze_trips_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(bronze_trips_df.columns))
+        and EXPECTED_COLUMNS["trips"].issubset(set(persisted_trips_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(persisted_trips_df.columns))
+    )
+    stations_schema_ok = (
+        EXPECTED_COLUMNS["stations"].issubset(set(bronze_stations_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(bronze_stations_df.columns))
+        and EXPECTED_COLUMNS["stations"].issubset(set(persisted_stations_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(persisted_stations_df.columns))
+    )
+    weather_schema_ok = (
+        EXPECTED_COLUMNS["weather"].issubset(set(bronze_weather_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(bronze_weather_df.columns))
+        and EXPECTED_COLUMNS["weather"].issubset(set(persisted_weather_df.columns))
+        and set(METADATA_COLUMNS).issubset(set(persisted_weather_df.columns))
+    )
 
     schema_valid = bool(trips_schema_ok and stations_schema_ok and weather_schema_ok)
 
@@ -133,6 +153,8 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
         "run_id": run_id,
         "env": env,
         "schema_version": "v1.0",
+        "write_mode": "append",
+        "accumulated_runs": accumulated_runs,
         "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
         "status": "SUCCESS"
         if schema_valid and received_files["total"] >= expected_files["total"]
@@ -143,7 +165,17 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
         "received_file_count": received_files["total"],
         "expected_files": expected_files,
         "received_files": received_files,
+        "batch_row_counts": {
+            "trips": batch_trips_count,
+            "stations": batch_stations_count,
+            "weather": batch_weather_count,
+        },
         "row_counts": {
+            "trips": trips_count,
+            "stations": stations_count,
+            "weather": weather_count,
+        },
+        "cumulative_row_counts": {
             "trips": trips_count,
             "stations": stations_count,
             "weather": weather_count,
@@ -152,26 +184,35 @@ def run_bronze_ingestion(spark: SparkSession, env: str, run_id: str) -> Dict[str
             "trips": {
                 "expected_files": expected_files["trips"],
                 "received_files": received_files["trips"],
+                "batch_row_count": batch_trips_count,
                 "row_count": trips_count,
+                "cumulative_row_count": trips_count,
+                "write_mode": "append",
                 "target_path": paths["bronze_trips"],
                 "schema_valid": trips_schema_ok,
-                "columns": bronze_trips_df.columns,
+                "columns": persisted_trips_df.columns,
             },
             "stations": {
                 "expected_files": expected_files["stations"],
                 "received_files": received_files["stations"],
+                "batch_row_count": batch_stations_count,
                 "row_count": stations_count,
+                "cumulative_row_count": stations_count,
+                "write_mode": "append",
                 "target_path": paths["bronze_stations"],
                 "schema_valid": stations_schema_ok,
-                "columns": bronze_stations_df.columns,
+                "columns": persisted_stations_df.columns,
             },
             "weather": {
                 "expected_files": expected_files["weather"],
                 "received_files": received_files["weather"],
+                "batch_row_count": batch_weather_count,
                 "row_count": weather_count,
+                "cumulative_row_count": weather_count,
+                "write_mode": "append",
                 "target_path": paths["bronze_weather"],
                 "schema_valid": weather_schema_ok,
-                "columns": bronze_weather_df.columns,
+                "columns": persisted_weather_df.columns,
             },
         },
     }
