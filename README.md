@@ -31,6 +31,7 @@
 6. [End-to-End Delivery — Operate the Lifecycle](#6-end-to-end-delivery--operate-the-lifecycle)
 7. [Evidence & Engineering Reflection](#7-evidence--engineering-reflection)
 8. [Repository Structure & Archived Coursework (`labs/`)](#8-repository-structure--archived-coursework-labs)
+9. [Disclosure of Use of AI Tools](#9-disclosure-of-use-of-ai-tools)
 
 ---
 
@@ -116,7 +117,7 @@ Raw bikeshare and weather feeds exhibit real-world operational defects that make
 
 ### Dual Execution Modes
 - **Deterministic Synthetic Mode (`--source synthetic`, Default):** Implemented in [`src/utils/data_generator.py`](src/utils/data_generator.py) (`seed=42`). Guarantees offline reproducibility in CI/CD while deterministically exercising every single imputation branch, deduplication window, orphan station join, and all 7 quarantine rules.
-- **Live Cloud Ingestion Mode (`--source real`):** Implemented in [`src/utils/real_data_downloader.py`](src/utils/real_data_downloader.py). Fetches official Citi Bike `.csv.zip` archives from Amazon S3, live station JSON from the NYC GBFS API, and historical weather from the Open-Meteo NOAA archive.
+- **Live Cloud Ingestion Mode (`--source real`):** Implemented in [`src/utils/real_data_downloader.py`](src/utils/real_data_downloader.py). Fetches official Citi Bike `.csv.zip` archives from Amazon S3, live station JSON from the NYC GBFS API, and historical weather from the Open-Meteo NOAA archive. It includes an **idempotent local file cache (`[CACHE HIT]`)** that verifies whether `real_trips_batch_01.csv`, `real_trips_batch_02.csv`, `real_stations.json`, and `real_weather_{YYYYMM}.csv` already exist locally before issuing network requests, skipping redundant downloads to save bandwidth and execution time (with optional `--force-download` / `force_download=True` support to force a fresh fetch).
 
 ---
 
@@ -125,8 +126,8 @@ Raw bikeshare and weather feeds exhibit real-world operational defects that make
 - **Implementation:** [`src/bronze/ingest_bronze.py`](src/bronze/ingest_bronze.py)
 - **Design Principles:** *"Load First, Interpret Later"* and *"Payload Plus Evidence"*.
 
-### Source-Faithful Ingestion & Lineage Metadata
-The Bronze layer reads raw landing CSV and JSON batches without dropping malformed records or performing destructive type casting. Every record across `bronze/trips`, `bronze/stations`, and `bronze/weather` is enriched with five mandatory lineage columns before being written as Snappy-compressed Parquet:
+### Source-Faithful Append-Only Ingestion & Lineage Metadata
+The Bronze layer reads raw landing CSV and JSON batches without dropping malformed records or performing destructive type casting, and persists them in **immutable, cumulative append-only mode (`.write.mode("append")`)** with `spark.sql.parquet.mergeSchema = true` enabled to safely handle schema evolution across historical runs. Every record across `bronze/trips`, `bronze/stations`, and `bronze/weather` is enriched with five mandatory lineage columns before being appended as Snappy-compressed Parquet:
 
 | Lineage Column | Type | Purpose |
 | :--- | :--- | :--- |
@@ -137,7 +138,7 @@ The Bronze layer reads raw landing CSV and JSON batches without dropping malform
 | `_schema_version` | `StringType` | Contract version tag (`v1.0`) |
 
 ### Delivery Audit Receipt (`bronze_receipt.json`)
-At the conclusion of Bronze ingestion, the pipeline verifies expected batch file counts (`4` files across `trips`, `stations`, and `weather`), validates that all required source and metadata columns are present, and writes [`bronze/bronze_receipt.json`](src/bronze/ingest_bronze.py) (alongside `_delivery_receipt.json` for backward compatibility) recording `"status": "SUCCESS"`, `"schema_validation_status": "PASSED"`, and exact persisted row counts.
+At the conclusion of Bronze ingestion, the pipeline verifies expected batch file counts (`4` files across `trips`, `stations`, and `weather`), validates that all required source (`EXPECTED_COLUMNS`) and lineage (`METADATA_COLUMNS`) fields are present across both the incoming batch and the accumulated Parquet tables, and writes [`bronze/bronze_receipt.json`](src/bronze/ingest_bronze.py) (alongside `_delivery_receipt.json` for backward compatibility). The receipt records `"write_mode": "append"`, `"status": "SUCCESS"`, `"schema_validation_status": "PASSED"`, the number of distinct historical batches (`accumulated_runs`), the current run's ingested counts (`batch_row_counts` filtered by `_run_id`), and the total accumulated table counts (`row_counts` / `cumulative_row_counts`).
 
 ---
 
@@ -294,7 +295,7 @@ Every pipeline execution produces a machine-readable audit report (`silver/_qual
 2. **Coordinate Imputation vs. Premature Quarantine:** In raw bikeshare logs, `3.0%` of otherwise valid trips lack destination coordinates (`0.0, 0.0`) due to GPS latch delays upon docking, even though `end_station_id` is recorded by the physical dock. Imputing coordinates from the GBFS station catalog in Silver Method 1 before running Quarantine Rule 7 rescues `1,050` valid rides per batch while maintaining full auditability via `_coord_imputed` and `dq_handling_flag`.
 3. **Spark 4.2 ANSI Mode Resilience:** PySpark 4.x enables ANSI SQL mode by default, meaning standard `cast("double")` or `to_timestamp()` calls abort the entire job when encountering malformed strings in Bronze CSVs. Using `try_cast` and `try_to_timestamp` in Silver and Gold ensures corrupt strings gracefully evaluate to `NULL` and route cleanly to quarantine or `Unknown` bins without crashing executors.
 4. **Limitations & Future Production Improvements:**
-   - **Storage Format:** Tables are currently persisted in standard Parquet with overwrite semantics. Migrating to **Delta Lake** or **Apache Iceberg** would provide ACID `MERGE` upserts, time-travel auditing, and schema evolution enforcement.
+   - **Storage Format:** While Bronze uses immutable append-only Parquet (`mergeSchema = true`) and Silver/Gold deduplicate and refresh downstream marts, migrating to **Delta Lake** or **Apache Iceberg** would provide ACID `MERGE` upserts, time-travel auditing, and catalog-level schema evolution enforcement.
    - **Orchestration & Alerting:** Replacing cron/GitHub Actions scheduling with **Apache Airflow** or **Dagster** and wiring `_quality_report.json` / `_READY_SIGNAL.json` metrics into Prometheus/Slack alerts would improve observability at multi-terabyte scale.
 
 ---
@@ -315,7 +316,7 @@ group3/
 │   ├── __init__.py
 │   ├── bronze/
 │   │   ├── __init__.py
-│   │   └── ingest_bronze.py            # Source-faithful batch ingestion & bronze_receipt.json
+│   │   └── ingest_bronze.py            # Source-faithful append-only ingestion & bronze_receipt.json
 │   ├── silver/
 │   │   ├── __init__.py
 │   │   ├── clean_quarantine.py         # Window dedup, coord imputation & 7-rule quarantine engine
@@ -330,7 +331,7 @@ group3/
 │       ├── __init__.py
 │       ├── spark_session.py            # Configured SparkSession factory (AQE, UTC, 8 partitions)
 │       ├── data_generator.py           # Deterministic synthetic batch generator (seed=42)
-│       └── real_data_downloader.py     # Live Citi Bike S3, GBFS & Open-Meteo NOAA downloader
+│       └── real_data_downloader.py     # Cached live Citi Bike S3, GBFS & Open-Meteo NOAA downloader
 ├── tests/
 │   ├── __init__.py
 │   ├── test_bronze_silver_core.py      # Unit & integration tests for Config, Generator, Bronze & Silver
@@ -348,3 +349,24 @@ group3/
 ├── run_pipeline.py                     # Unified CLI orchestrator (--env dev|test|prod)
 └── README.md
 ```
+
+---
+
+## 9. Disclosure of Use of AI Tools
+
+In accordance with the University of Stavanger (UiS) academic integrity guidelines for DAT535, the team discloses the following regarding the use of generative AI tools during the development of this project:
+
+1. **Tools Used:**
+   - Generative AI coding and documentation assistants (ChatGPT / Gemini / GitHub Copilot) integrated within the local IDE workflow.
+2. **Purpose of Use:**
+   - Refactoring PySpark boilerplate, reviewing Medallion architecture patterns (such as transitioning Bronze ingestion to immutable `.mode("append")` with cumulative audit receipt tracking and adding local file caching `[CACHE HIT]` to the real-data downloader), debugging PySpark 4.2.0 ANSI SQL casting edge cases (`try_cast` / `try_to_timestamp`), and structuring technical documentation and Mermaid diagrams in `README.md`.
+3. **Scope of Use:**
+   - AI assistance was strictly used as a supportive pair-programming and documentation aid. All core architectural decisions, domain-specific data quality rules (the 7-rule Silver quarantine engine, Haversine physics calculations, and GBFS coordinate imputation), Gold analytical mart definitions, and Silver-to-Gold reconciliation invariants were defined, directed, and validated by the project authors.
+4. **Review and Verification Procedure:**
+   - Every piece of code and configuration was manually inspected line-by-line by the team and empirically verified on the Linux Spark environment (`spark-env` with OpenJDK 17 and PySpark 4.2.0) through:
+     - Execution of the complete **11-test `pytest` unit and integration suite** (`python -m pytest tests/ -v`), verifying schema contracts, row conservation equations, coordinate imputation, and failure-gate blocking.
+     - Consecutive end-to-end executions of `run_pipeline.py` in both **deterministic synthetic mode** (`--source synthetic`) and **live cloud mode** (`--source real --scope jc --month 202409`), confirming append-only accumulation in Bronze, window-based deduplication in Silver, 100% reconciliation in Gold, and idempotent `[CACHE HIT]` reuse on subsequent runs.
+5. **Significant AI-Assisted Artifacts:**
+   - Refinements to [`src/bronze/ingest_bronze.py`](src/bronze/ingest_bronze.py) (append-only persistence and cumulative `bronze_receipt.json` metrics), [`src/utils/real_data_downloader.py`](src/utils/real_data_downloader.py) (idempotent local file caching and `--force-download` flag), unit test scaffolding in [`tests/`](tests/), and formatting of [`README.md`](README.md).
+
+**Statement of Responsibility:** The students (**Ramon Garcia Arrasa**, ID `309024`, and **Oriol Garcia Torcal**, ID `309023`) have thoroughly reviewed, tested, and validated all code, tests, and documentation in this repository, and take full academic and technical responsibility for the entire submission.
