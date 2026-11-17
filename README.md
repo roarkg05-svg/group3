@@ -199,7 +199,7 @@ $$\underbrace{35,000}_{\text{Bronze Input Rows}} = \underbrace{31,325}_{\text{Si
 | Mart Module | Target Parquet Path | Grain | Key Metrics & Engineering Logic |
 | :--- | :--- | :--- | :--- |
 | **[`mart_station_flow.py`](src/gold/mart_station_flow.py)** | `gold/station_rebalancing_mart` *(partitioned by `year`, `month`)* | `station_id` $\times$ `trip_date` (`894` rows) | Full outer join of daily departures (`started_at` date) and arrivals (`ended_at` date) so overnight trips credit stock on the exact calendar day; computes `net_flow = inbound - outbound`, `turnover_ratio = (inbound + outbound) / capacity`, and deterministic `peak_departure_hour` via `row_number()` tie-breaking. Preserves non-catalog orphan stations (`is_catalog_station = False`, `turnover_ratio = NULL`). |
-| **[`mart_user_behavior.py`](src/gold/mart_user_behavior.py)** | `gold/user_behavior_mart/kpis` & `gold/user_behavior_mart/top_corridors` | `member_casual` $\times$ `rideable_type` (`4` rows) & Top `10` corridors per tier (`20` rows) | Computes `total_trips`, `avg_duration_min`, `median_duration_min` (`percentile_approx(..., 0.5)`), `avg_speed_kmh`, and `avg_distance_km`. Ranks the top 10 origin-destination station pairs per rider tier with fallback to `station_id` for uncataloged docks. |
+| **[`mart_user_behavior.py`](src/gold/mart_user_behavior.py)** | `gold/user_behavior_mart/kpis` & `gold/user_behavior_mart/top_corridors` | `member_casual` $\times$ `rideable_type` (`4` rows) & Top `10` corridors per tier (`20` rows) | Registers `silver_trips_view` (`createOrReplaceTempView`) and executes explicit **Spark SQL** (`spark.sql(...)`) to compute `total_trips`, `avg_duration_min`, `median_duration_min` (`percentile_approx(..., 0.5)`), `avg_speed_kmh`, and `avg_distance_km`. Ranks the top 10 origin-destination station pairs per rider tier with fallback to `station_id` for uncataloged docks. |
 | **[`mart_weather_ridership.py`](src/gold/mart_weather_ridership.py)** | `gold/weather_commute_impact` | `temperature_bin` $\times$ `rain_bin` (`6` rows) | Deduplicates weather observations to 1 row per hour (`row_number()` ordered by latest ingestion), casts fields via ANSI-safe `try_cast`, joins trips on `date_trunc("hour", started_at)`, bins temperature (`Freezing`, `Cold`, `Mild`, `Warm`) and precipitation (`No Rain`, `Light Rain`, `Heavy Rain`), and computes `total_trips`, `hours_with_trips`, `avg_trips_per_hour`, `avg_distance_km`, and `avg_speed_kmh`. |
 
 ### Upstream Reconciliation & Publication Gate (`_READY_SIGNAL.json`)
@@ -247,6 +247,9 @@ DAT535_DATA_DIR="/tmp/spark-lab-data" python run_pipeline.py --env prod
 
 # 5. Optional: Run with live Citi Bike S3, GBFS, and NOAA Open-Meteo data
 DAT535_DATA_DIR="/tmp/spark-lab-data" python run_pipeline.py --env dev --source real --scope jc
+
+# 6. Run the reproducible Spark configuration benchmark (SortMergeJoin/200 vs BroadcastHashJoin/8)
+DAT535_DATA_DIR="/tmp/spark-lab-data" python scripts/benchmark_spark.py --env dev
 ```
 
 ---
@@ -332,6 +335,8 @@ group3/
 │       ├── spark_session.py            # Configured SparkSession factory (AQE, UTC, 8 partitions)
 │       ├── data_generator.py           # Deterministic synthetic batch generator (seed=42)
 │       └── real_data_downloader.py     # Cached live Citi Bike S3, GBFS & Open-Meteo NOAA downloader
+├── scripts/
+│   └── benchmark_spark.py              # Reproducible Spark benchmark (200/SortMergeJoin vs 8/BroadcastHashJoin)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_bronze_silver_core.py      # Unit & integration tests for Config, Generator, Bronze & Silver
@@ -354,19 +359,20 @@ group3/
 
 ## 9. Disclosure of Use of AI Tools
 
-In accordance with the University of Stavanger (UiS) academic integrity guidelines for DAT535, the team discloses the following regarding the use of generative AI tools during the development of this project:
+In accordance with the University of Stavanger (UiS) academic integrity guidelines for DAT535, the team discloses the following regarding the use of generative AI tools by both group members during the development of this project:
 
 1. **Tools Used:**
-   - Generative AI coding and documentation assistants (ChatGPT / Gemini / GitHub Copilot) integrated within the local IDE workflow.
+   - **Google Gemini**, **Anthropic Claude**, and a **local LLM assistant / GitHub Copilot** integrated within the team's local IDE workflow.
 2. **Purpose of Use:**
-   - Refactoring PySpark boilerplate, reviewing Medallion architecture patterns (such as transitioning Bronze ingestion to immutable `.mode("append")` with cumulative audit receipt tracking and adding local file caching `[CACHE HIT]` to the real-data downloader), debugging PySpark 4.2.0 ANSI SQL casting edge cases (`try_cast` / `try_to_timestamp`), and structuring technical documentation and Mermaid diagrams in `README.md`.
+   - Refactoring PySpark boilerplate and SQL expressions, reviewing Medallion architecture patterns (such as transitioning Bronze ingestion to immutable `.mode("append")` with cumulative audit receipt tracking, adding idempotent local file caching `[CACHE HIT]` to the real-data downloader, and combining DataFrame API with explicit Spark SQL `createOrReplaceTempView` + `spark.sql`), designing the reproducible performance benchmark (`scripts/benchmark_spark.py`), debugging PySpark 4.2.0 ANSI SQL casting edge cases (`try_cast` / `try_to_timestamp`), and structuring technical documentation and Mermaid diagrams in `README.md`.
 3. **Scope of Use:**
-   - AI assistance was strictly used as a supportive pair-programming and documentation aid. All core architectural decisions, domain-specific data quality rules (the 7-rule Silver quarantine engine, Haversine physics calculations, and GBFS coordinate imputation), Gold analytical mart definitions, and Silver-to-Gold reconciliation invariants were defined, directed, and validated by the project authors.
+   - AI assistance was strictly used as a supportive pair-programming, benchmarking, and documentation aid across the Bronze, Silver, and Gold modules. All core architectural decisions, domain-specific data quality rules (the 7-rule Silver quarantine engine, Haversine physics calculations, and GBFS coordinate imputation), Gold analytical mart definitions, and Silver-to-Gold reconciliation invariants were defined, directed, and validated by the project authors.
 4. **Review and Verification Procedure:**
-   - Every piece of code and configuration was manually inspected line-by-line by the team and empirically verified on the Linux Spark environment (`spark-env` with OpenJDK 17 and PySpark 4.2.0) through:
-     - Execution of the complete **11-test `pytest` unit and integration suite** (`python -m pytest tests/ -v`), verifying schema contracts, row conservation equations, coordinate imputation, and failure-gate blocking.
+   - Every piece of code, SQL query, and configuration was manually inspected line-by-line by both team members and empirically verified on the Linux Spark environment (`spark-env` with OpenJDK 17 and PySpark 4.2.0) through:
+     - Execution of the complete **11-test `pytest` unit and integration suite** (`python -m pytest tests/ -v`), verifying schema contracts, row conservation equations, coordinate imputation, Spark SQL user KPI aggregations, and failure-gate blocking.
      - Consecutive end-to-end executions of `run_pipeline.py` in both **deterministic synthetic mode** (`--source synthetic`) and **live cloud mode** (`--source real --scope jc --month 202409`), confirming append-only accumulation in Bronze, window-based deduplication in Silver, 100% reconciliation in Gold, and idempotent `[CACHE HIT]` reuse on subsequent runs.
+     - Execution of [`scripts/benchmark_spark.py`](scripts/benchmark_spark.py) (1 warm-up + 3 timed runs per configuration) and inspection of `.explain(mode="formatted")` physical plans to verify `BroadcastHashJoin` and shuffle partition reduction (`200` vs. `8`).
 5. **Significant AI-Assisted Artifacts:**
-   - Refinements to [`src/bronze/ingest_bronze.py`](src/bronze/ingest_bronze.py) (append-only persistence and cumulative `bronze_receipt.json` metrics), [`src/utils/real_data_downloader.py`](src/utils/real_data_downloader.py) (idempotent local file caching and `--force-download` flag), unit test scaffolding in [`tests/`](tests/), and formatting of [`README.md`](README.md).
+   - Refinements to [`src/bronze/ingest_bronze.py`](src/bronze/ingest_bronze.py) (append-only persistence and cumulative `bronze_receipt.json` metrics), [`src/utils/real_data_downloader.py`](src/utils/real_data_downloader.py) (idempotent local file caching and `--force-download` flag), [`src/gold/mart_user_behavior.py`](src/gold/mart_user_behavior.py) (explicit Spark SQL view and `percentile_approx` KPI query), [`scripts/benchmark_spark.py`](scripts/benchmark_spark.py) (reproducible configuration benchmark), unit test scaffolding in [`tests/`](tests/), and documentation formatting in [`README.md`](README.md).
 
-**Statement of Responsibility:** The students (**Ramon Garcia Arrasa**, ID `309024`, and **Oriol Garcia Torcal**, ID `309023`) have thoroughly reviewed, tested, and validated all code, tests, and documentation in this repository, and take full academic and technical responsibility for the entire submission.
+**Statement of Responsibility:** Both students — **Ramon Garcia Arrasa** (UiS ID `309024`) and **Oriol Garcia Torcal** (UiS ID `309023`) — have thoroughly reviewed, tested, and validated all code, SQL queries, benchmarks, tests, and documentation in this repository, and take full and joint academic and technical responsibility for the entire submission.

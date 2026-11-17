@@ -7,13 +7,27 @@ TOP_CORRIDORS_PER_TIER = 10
 
 
 def build_user_kpis(trips_df: DataFrame) -> DataFrame:
-    """Build trip KPIs with one row per rider tier and bike type."""
-    return trips_df.groupBy("member_casual", "rideable_type").agg(
-        F.count(F.lit(1)).alias("total_trips"),
-        F.avg("trip_duration_min").alias("avg_duration_min"),
-        F.percentile_approx("trip_duration_min", 0.5).alias("median_duration_min"),
-        F.avg("speed_kmh").alias("avg_speed_kmh"),
-        F.avg("distance_km").alias("avg_distance_km"),
+    """Build trip KPIs with one row per rider tier and bike type using explicit Spark SQL."""
+    spark = trips_df.sparkSession
+    trips_df.createOrReplaceTempView("silver_trips_view")
+    duration_col = (
+        "trip_duration_min"
+        if "trip_duration_min" in trips_df.columns
+        else "duration_minutes"
+    )
+    return spark.sql(
+        f"""
+        SELECT
+            member_casual,
+            rideable_type,
+            COUNT(1) AS total_trips,
+            AVG({duration_col}) AS avg_duration_min,
+            percentile_approx({duration_col}, 0.5) AS median_duration_min,
+            AVG(speed_kmh) AS avg_speed_kmh,
+            AVG(distance_km) AS avg_distance_km
+        FROM silver_trips_view
+        GROUP BY member_casual, rideable_type
+        """
     )
 
 
